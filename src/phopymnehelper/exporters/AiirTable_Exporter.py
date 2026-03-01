@@ -37,7 +37,7 @@ def export_eeg_dataset_to_airtable(raw: mne.io.BaseRaw,
         Dictionary with 'success' (bool), 'record_id' (str if successful), and 'error' (str if failed)
         
     Usage:
-        from phoofflineeeganalysis.analysis.xdf_files import LabRecorderXDF
+        from phopylslhelper.core.xdf_files import LabRecorderXDF
         from phoofflineeeganalysis.analysis.airtable_export import export_eeg_dataset_to_airtable
         
         # Load XDF file
