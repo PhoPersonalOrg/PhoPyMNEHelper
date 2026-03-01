@@ -9,7 +9,6 @@ import warnings
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
 from pathlib import Path
 import mne
 from scipy.stats import ttest_rel, pearsonr
@@ -498,7 +497,7 @@ def generate_recommendations(summary_stats):
 
 def visualize_fatigue_comparison(results, save_plots=True):
     """Create comprehensive visualization of fatigue analysis results"""
-
+    import seaborn as sns
     # Set up the plotting style
     plt.style.use('default')
     sns.set_palette("husl")

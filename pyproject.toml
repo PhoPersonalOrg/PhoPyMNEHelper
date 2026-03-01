@@ -1,6 +1,6 @@
 [project]
 name = "phopymnehelper"
-version = "0.1.2"
+version = "0.2.0"
 description = "Wrappers for common MNE utilities, such as my personal electrode/head mesh configs"
 readme = "README.md"
 requires-python = ">=3.10,<3.12"
@@ -13,6 +13,8 @@ dependencies = [
     "numpy~=1.20",
     "pandas>=1.5.3,<3.0.0",
     "mne>=1.8.0",
+    "xarray[complete]>=2024.3.0",
+    "h5py>=3.14.0",
 ]
 
 [build-system]
