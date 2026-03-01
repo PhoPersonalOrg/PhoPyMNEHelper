@@ -6,7 +6,6 @@ import uuid
 from copy import deepcopy
 from typing import Dict, List, Tuple, Optional, Callable, Union, Any
 from nptyping import NDArray
-from matplotlib import pyplot as plt
 
 from pathlib import Path
 import numpy as np
@@ -24,7 +23,6 @@ mne.viz.set_browser_backend("Matplotlib")
 
 # from ..EegProcessing import bandpower
 from numpy.typing import NDArray
-
 
 set_log_level("WARNING")
 

@@ -6,26 +6,17 @@ import uuid
 from copy import deepcopy
 from typing import Dict, List, Tuple, Optional, Callable, Union, Any
 from nptyping import NDArray
-from matplotlib import pyplot as plt
 
 from pathlib import Path
+import scipy.io
 import numpy as np
 import pandas as pd
 
 import mne
 from mne import set_log_level
 from copy import deepcopy
-import mne
-
-from mne.io import read_raw
-import pyedflib
-
-from phoofflineeeganalysis.analysis.motion_data import MotionData ## for creating single EDF+ files containing channel with different sampling rates (e.g. EEG and MOTION data)
 
 mne.viz.set_browser_backend("Matplotlib")
-
-from mne_lsl.player import PlayerLSL as Player
-from mne_lsl.stream import StreamLSL as Stream
 
 # from phoofflineeeganalysis.EegProcessing import bandpower
 # from ..EegProcessing import bandpower
@@ -39,7 +30,7 @@ class MNEHelpers:
     """ General MNE helper Methods
     Usage:
             from phoofflineeeganalysis.analysis.MNE_helpers import MNEHelpers
-            
+            from phopymnehelper.MNE_helpers import MNEHelpers
     """
     @classmethod
     def get_recording_files(cls, recordings_dir: Path, recordings_extensions = ['.fif']):
@@ -367,6 +358,7 @@ class MNEHelpers:
         
         return raw
 
+
     @classmethod
     def debug_compare_raw_alignments(cls, time_col_name: str = 'time', **raws_kwargs):
         """Safely merge additional annotations into a Raw object.
@@ -383,6 +375,7 @@ class MNEHelpers:
         # eeg_raw_df = eeg_raws.to_data_frame(time_format='datetime')
         # motion_raw_df = motion_raw.to_data_frame(time_format='datetime')
         return raw_dfs_dict, min_max_times_dict
+
 
     @classmethod
     def build_dataset_span_dataframe(cls, a_raw_datasets: List[Union[mne.io.RawArray, mne.io.Raw]], time_col_name: str = 'time', dataset_idx_col_name: str='dataset_idx'):
@@ -402,8 +395,7 @@ class MNEHelpers:
 # ==================================================================================================================================================================================================================================================================================== #
 # MNE Raw-like objects enhancer/extender                                                                                                                                                                                                                                               #
 # ==================================================================================================================================================================================================================================================================================== #
-import mne
-from datetime import timedelta
+
 
 class DatasetDatetimeBoundsRenderingMixin:
     """ works for mne.io.RawArray, mne.io.BaseRaw, mne.io.Raw
@@ -429,8 +421,7 @@ class DatasetDatetimeBoundsRenderingMixin:
     
 
 
-import scipy.io
-import numpy as np
+
 
 class DatasetRawExportToConvertedFormatFileMixin:
 
@@ -457,6 +448,7 @@ class DatasetRawExportToConvertedFormatFileMixin:
         History 2025-09-19 copied from `PhoLabStreamingReceiver.src.PhoLabStreamingReceiver.analysis.EEG_data.EEGData.save_mne_raw_to_edf`
 
         """
+        import pyedflib
         # Get data and metadata
         data = raw.get_data()  # shape: (n_channels, n_samples)
         n_channels, n_samples = data.shape
