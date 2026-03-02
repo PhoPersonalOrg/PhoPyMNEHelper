@@ -18,7 +18,7 @@ from copy import deepcopy
 
 mne.viz.set_browser_backend("Matplotlib")
 
-# from phoofflineeeganalysis.EegProcessing import bandpower
+# from phopymnehelper.EegProcessing import bandpower
 # from ..EegProcessing import bandpower
 from numpy.typing import NDArray
 
@@ -29,7 +29,7 @@ set_log_level("WARNING")
 class MNEHelpers:
     """ General MNE helper Methods
     Usage:
-            from phoofflineeeganalysis.analysis.MNE_helpers import MNEHelpers
+            from phopymnehelper.MNE_helpers import MNEHelpers
             from phopymnehelper.MNE_helpers import MNEHelpers
     """
     @classmethod
@@ -166,7 +166,7 @@ class MNEHelpers:
         """ Convert 'start_time' and 'end_time' columns to datetime
 
         Usage:
-            from phoofflineeeganalysis.analysis.MNE_helpers import MNEHelpers
+            from phopymnehelper.MNE_helpers import MNEHelpers
             
             dataset_moving_annotations: mne.Annotations = MNEHelpers.convert_df_with_boolean_col_to_epochs(a_motion_df, is_bad_col_name="is_moving", annotation_description_name="BAD_motion")
             dataset_moving_annotations
@@ -432,7 +432,7 @@ class DatasetRawExportToConvertedFormatFileMixin:
         Attempts to preserve as much metadata as possible, including channel info and compatible annotations.
 
         Usage:
-            from phoofflineeeganalysis.analysis.EEG_data import EEGData
+            from phopymnehelper.EEG_data import EEGData
 
             ## INPUTS: raw_eeg
             edf_export_parent_path: Path = Path(r"E:/Dropbox (Personal)/Databases/AnalysisData/MNE_preprocessed/exported_EDF").resolve()
@@ -550,7 +550,7 @@ class DatasetRawExportToConvertedFormatFileMixin:
         """ 
         EEGComputations.to_hdf(a_result=a_raw_outputs, file_path=hdf5_out_path, root_key=f"/{basename}/")
 
-        from phoofflineeeganalysis.analysis.EEG_data import EEGComputations
+        from phopymnehelper.EEG_data import EEGComputations
 
         # EEGComputations.to_hdf(a_result=results[0], file_path="")
         hdf5_out_path: Path = Path('E:/Dropbox (Personal)/Databases/AnalysisData/MNE_preprocessed/outputs').joinpath('2025-09-23_eegComputations.h5').resolve()

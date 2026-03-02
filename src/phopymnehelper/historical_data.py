@@ -17,19 +17,19 @@ from copy import deepcopy
 import mne
 from mne.io import read_raw
 
-from phoofflineeeganalysis.analysis.motion_data import MotionData ## for creating single EDF+ files containing channel with different sampling rates (e.g. EEG and MOTION data)
+from phopymnehelper.motion_data import MotionData ## for creating single EDF+ files containing channel with different sampling rates (e.g. EEG and MOTION data)
 
 mne.viz.set_browser_backend("Matplotlib")
 
-# from phoofflineeeganalysis.EegProcessing import bandpower
-from phoofflineeeganalysis.analysis.MNE_helpers import MNEHelpers
+# from phopymnehelper.EegProcessing import bandpower
+from phopymnehelper.MNE_helpers import MNEHelpers
 # from ..EegProcessing import bandpower
 from numpy.typing import NDArray
 # from nptyping import NDArray
 
 set_log_level("WARNING")
 
-from phoofflineeeganalysis.helpers.indexing_helpers import reorder_columns_relative
+from phopymnehelper.helpers.indexing_helpers import reorder_columns_relative
 
 from phopylslhelper.file_metadata_caching.data_file_metadata import DataFileMetadataParser
 
@@ -37,8 +37,8 @@ from phopylslhelper.file_metadata_caching.data_file_metadata import DataFileMeta
 class HistoricalData:
     """ Methods related to retrospective processing of recorded data
         
-    from phoofflineeeganalysis.analysis.historical_data import HistoricalData
-        
+    from phopymnehelper.historical_data import HistoricalData
+    from phopymnehelper.historical_data import HistoricalData
     """
     modality_channels_dict = {'EEG': ['AF3', 'F7', 'F3', 'FC5', 'T7', 'P7', 'O1', 'O2', 'P8', 'T8', 'FC6', 'F4', 'F8', 'AF4'],
                             'MOTION': ['AccX', 'AccY', 'AccZ', 'GyroX', 'GyroY', 'GyroZ'],
@@ -265,7 +265,7 @@ class HistoricalData:
             HistoricalData.read_exported_fif_files(found_recording_files=found_recording_files)
 
         """
-        from phoofflineeeganalysis.analysis.MNE_helpers import DatasetDatetimeBoundsRenderingMixin, RawArrayExtended, RawExtended, up_convert_raw_objects, up_convert_raw_obj
+        from phopymnehelper.MNE_helpers import DatasetDatetimeBoundsRenderingMixin, RawArrayExtended, RawExtended, up_convert_raw_objects, up_convert_raw_obj
         
         # import csv
         
@@ -525,9 +525,9 @@ class HistoricalData:
         ):
         """ Find periods that overlap the motion data
         
-        from phoofflineeeganalysis.analysis.EEG_data import EEGData
-        from phoofflineeeganalysis.analysis.motion_data import MotionData
-        from phoofflineeeganalysis.analysis.historical_data import HistoricalData
+        from phopymnehelper.EEG_data import EEGData
+        from phopymnehelper.motion_data import MotionData
+        from phopymnehelper.historical_data import HistoricalData
         
         n_most_recent_sessions_to_preprocess: int = 10
         
@@ -632,9 +632,9 @@ class HistoricalData:
         ):
         """ Find periods that overlap the motion data
 
-        from phoofflineeeganalysis.analysis.EEG_data import EEGData
-        from phoofflineeeganalysis.analysis.motion_data import MotionData
-        from phoofflineeeganalysis.analysis.historical_data import HistoricalData
+        from phopymnehelper.EEG_data import EEGData
+        from phopymnehelper.motion_data import MotionData
+        from phopymnehelper.historical_data import HistoricalData
 
         n_most_recent_sessions_to_preprocess: int = 10
 
@@ -753,7 +753,7 @@ class HistoricalData:
         
         Usage:
         
-            from phoofflineeeganalysis.analysis.historical_data import HistoricalData
+            from phopymnehelper.historical_data import HistoricalData
 
             pre_processed_EEG_recording_files = HistoricalData.get_recording_files(recordings_dir=sso.eeg_analyzed_parent_export_path)
             pre_processed_EEG_recording_file_df: pd.DataFrame = HistoricalData.build_file_comparison_df(recording_files=pre_processed_EEG_recording_files)

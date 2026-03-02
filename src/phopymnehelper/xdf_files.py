@@ -13,14 +13,14 @@ from benedict import benedict
 
 from phopylslhelper.general_helpers import unwrap_single_element_listlike_if_needed, readable_dt_str
 from phopylslhelper.easy_time_sync import EasyTimeSyncParsingMixin
-from phoofflineeeganalysis.analysis.SavedSessionsProcessor import DataModalityType #TODO: move somewhere common
+from phopymnehelper.SavedSessionsProcessor import DataModalityType #TODO: move somewhere common
 
 
 @pd.api.extensions.register_dataframe_accessor("xdf_streams")
 class XDFDataStreamAccessor(object):
     """ A Pandas pd.DataFrame representation of [start, stop, label] epoch intervals 
     
-    from phoofflineeeganalysis.analysis.xdf_files import XDFDataStreamAccessor, LabRecorderXDF
+    from phopymnehelper.xdf_files import XDFDataStreamAccessor, LabRecorderXDF
 
     xdf_stream_infos_df: pd.DataFrame = XDFDataStreamAccessor.init_from_results(_out_xdf_stream_infos_df=_out_xdf_stream_infos_df, active_only_out_eeg_raws=active_only_out_eeg_raws)
     
@@ -232,7 +232,7 @@ class XDFDataStreamAccessor(object):
 class LabRecorderXDF:
     """ Loads a `.xdf` file saved by LabRecorder which may contain one or more LSL Streams of differing types
     
-    from phoofflineeeganalysis.analysis.xdf_files import XDFDataStreamAccessor, LabRecorderXDF
+    from phopymnehelper.xdf_files import XDFDataStreamAccessor, LabRecorderXDF
 
 
     """
@@ -301,7 +301,7 @@ class LabRecorderXDF:
             return [], []
 
         # Up-convert once for safety/consistency
-        from phoofflineeeganalysis.analysis.MNE_helpers import up_convert_raw_obj
+        from phopymnehelper.MNE_helpers import up_convert_raw_obj
 
         eeg_raws_uc = [up_convert_raw_obj(r) for r in eeg_raws]
 
@@ -993,7 +993,7 @@ class LabRecorderXDF:
         if `not should_load_full_file_data`, only return the `_out_xdf_stream_infos_df, lab_recorder_xdf_files` and not `_out_eeg_raw` (which will be None)
 
         """
-        from phoofflineeeganalysis.analysis.MNE_helpers import up_convert_raw_objects, up_convert_raw_obj
+        from phopymnehelper.MNE_helpers import up_convert_raw_objects, up_convert_raw_obj
         from phopymnehelper.analysis.computations.EEG_data import EEGData
                                        
         assert lab_recorder_output_path.exists()
@@ -1121,11 +1121,11 @@ class LabRecorderXDF:
     @classmethod
     def to_hdf(cls, active_only_out_eeg_raws, results, xdf_stream_infos_df: pd.DataFrame, file_path: Path, root_key: str='/', debug_print=True):
         """ 
-        from phoofflineeeganalysis.PendingNotebookCode import batch_compute_all_eeg_datasets
+        from phopymnehelper.PendingNotebookCode import batch_compute_all_eeg_datasets
                 
         LabRecorderXDF.to_hdf(a_result=a_raw_outputs, file_path=hdf5_out_path, root_key=f"/{basename}/")
 
-        from phoofflineeeganalysis.analysis.EEG_data import EEGComputations
+        from phopymnehelper.EEG_data import EEGComputations
 
         active_only_out_eeg_raws, results = batch_compute_all_eeg_datasets(eeg_raws=_out_eeg_raw, limit_num_items=150, max_workers = 4)
                 

@@ -14,7 +14,7 @@ from mne import set_log_level
 from copy import deepcopy
 import mne
 
-# from phoofflineeeganalysis.tzinfo_examples import Eastern
+# from phopymnehelper.tzinfo_examples import Eastern
 
 
 datasets = []
@@ -24,9 +24,9 @@ from attrs import define, field
 # from ..EegProcessing import bandpower
 
 from phopymnehelper.analysis.computations.EEG_data import EEGData
-from phoofflineeeganalysis.analysis.motion_data import MotionData
-from phoofflineeeganalysis.analysis.event_data import EventData
-from phoofflineeeganalysis.analysis.historical_data import HistoricalData
+from phopymnehelper.motion_data import MotionData
+from phopymnehelper.event_data import EventData
+from phopymnehelper.historical_data import HistoricalData
 
 set_log_level("WARNING")
 
@@ -86,7 +86,7 @@ class SavedSessionsProcessor:
     """ Top-level manager of EEG recordings
     
 
-    from phoofflineeeganalysis.analysis.SavedSessionsProcessor import SavedSessionsProcessor, SessionModality, DataModalityType
+    from phopymnehelper.SavedSessionsProcessor import SavedSessionsProcessor, SessionModality, DataModalityType
      
     sso: SavedSessionsProcessor = SavedSessionsProcessor()
     sso
@@ -385,7 +385,7 @@ class SavedSessionsProcessor:
         written_EDF_file_paths = sso.save_to_EDF()
         
         """
-        from phoofflineeeganalysis.analysis.MNE_helpers import up_convert_raw_objects
+        from phopymnehelper.MNE_helpers import up_convert_raw_objects
 
         edf_export_parent_path.mkdir(exist_ok=True)
         (all_data_EEG, all_times_EEG), datasets_EEG, df_EEG = self.flat_data_modality_dict['EEG']  ## Unpacking
@@ -415,7 +415,7 @@ class SavedSessionsProcessor:
 class EntireDayMergedData:
     """ Manages data merged for an entire day
     
-    from phoofflineeeganalysis.analysis.SavedSessionsProcessor import EntireDayMergedData
+    from phopymnehelper.SavedSessionsProcessor import EntireDayMergedData
     
     """
     datasets: List[mne.io.Raw] = field(default=None)
@@ -497,7 +497,7 @@ class EntireDayMergedData:
         Returns:
             mne.io.Raw: Merged Raw dataset for the specified date.
         """
-        from phoofflineeeganalysis.analysis.MNE_helpers import up_convert_raw_objects, up_convert_raw_obj
+        from phopymnehelper.MNE_helpers import up_convert_raw_objects, up_convert_raw_obj
 
         if "EEG" not in sso.modalities:
             raise ValueError("The SavedSessionsProcessor does not contain any EEG modality data.")

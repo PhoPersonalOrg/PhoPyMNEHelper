@@ -16,8 +16,8 @@ from mne import set_log_level
 from copy import deepcopy
 import mne
 
-from phoofflineeeganalysis.analysis.MNE_helpers import MNEHelpers
-from phoofflineeeganalysis.analysis.historical_data import HistoricalData ## for creating single EDF+ files containing channel with different sampling rates (e.g. EEG and MOTION data)
+from phopymnehelper.MNE_helpers import MNEHelpers
+from phopymnehelper.historical_data import HistoricalData ## for creating single EDF+ files containing channel with different sampling rates (e.g. EEG and MOTION data)
 
 mne.viz.set_browser_backend("Matplotlib")
 
@@ -30,7 +30,7 @@ set_log_level("WARNING")
 class EventData(HistoricalData):
     """ Methods related to processing of logging/event data
     
-    from phoofflineeeganalysis.analysis.event_data import EventData
+    from phopymnehelper.event_data import EventData
     
     (all_data_PHO_LOG, all_times_PHO_LOG), datasets_PHO_LOG, df_PHO_LOG = flat_data_modality_dict['PHO_LOG_TO_LSL']  ## Unpacking
     
@@ -199,7 +199,7 @@ class EventData(HistoricalData):
     def complete_correct_COMMON_annotation_df(cls, a_logging_modality, dataset_idx_col_name: str='DATASET_idx', include_full_file_path: bool=False) -> pd.DataFrame:
         """INPUTS: sso.modalities['PHO_LOG_TO_LSL']
         Usage:
-            from phoofflineeeganalysis.analysis.event_data import EventData
+            from phopymnehelper.event_data import EventData
 
             all_pho_log_to_lsl_df: pd.DataFrame = EventData.complete_correct_COMMON_annotation_df(a_logging_modality=sso.modalities['PHO_LOG_TO_LSL'], dataset_idx_col_name='MOTION_idx')
             all_pho_log_to_lsl_df
@@ -281,7 +281,7 @@ class EventData(HistoricalData):
         Calls: cls.perform_fixup_WHISPER_annotation_df(...)
         
         Usage:
-            from phoofflineeeganalysis.analysis.event_data import EventData
+            from phopymnehelper.event_data import EventData
 
             all_WHISPER_df: pd.DataFrame = EventData.complete_correct_WHISPER_annotation_df(a_logging_modality=sso.modalities['WHISPER'])
             all_WHISPER_df
@@ -298,7 +298,7 @@ class EventData(HistoricalData):
     def complete_correct_Pho_Log_To_LSL_annotation_df(cls, a_logging_modality, **kwargs) -> pd.DataFrame:
         """INPUTS: sso.modalities['PHO_LOG_TO_LSL']
         Usage:
-            from phoofflineeeganalysis.analysis.event_data import EventData
+            from phopymnehelper.event_data import EventData
 
             all_pho_log_to_lsl_df: pd.DataFrame = EventData.complete_correct_Pho_Log_To_LSL_annotation_df(a_logging_modality=sso.modalities['PHO_LOG_TO_LSL'])
             all_pho_log_to_lsl_df
