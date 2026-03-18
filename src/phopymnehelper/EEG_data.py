@@ -183,6 +183,8 @@ class EEGComputations:
     @classmethod
     def all_fcns_dict(cls):
         return {
+            'time_independent_bad_channels': cls.time_independent_bad_channels,
+            # 'time_dependent_bad_channels': cls.time_dependent_bad_channels,
             'raw_data_topo': cls.raw_data_topo,
             'cwt': cls.raw_morlet_cwt, 
             'spectogram': cls.raw_spectogram_working,
@@ -311,10 +313,14 @@ class EEGComputations:
 
     @classmethod
     def raw_spectogram_working(cls, raw: mne.io.Raw, picks=None, nperseg=1024, noverlap=512, mask_bad_annotated_times: bool=True):
-        """Compute continuous Morlet wavelet transform for MNE Raw EEG.
+        """Compute continuous spectrogram for MNE Raw EEG.
+
+        BAD channels (e.g. from ``time_independent_bad_channels`` or ``raw.info['bads']``)
+        are excluded from the computation.  When *mask_bad_annotated_times* is True,
+        time segments covered by ``BAD_*`` annotations are NaN-ed out before the FFT.
 
         raw: mne.io.Raw
-        picks: channels to use (default: all EEG)
+        picks: channels to use (default: all EEG, excluding bads)
         wavelet_param: number of cycles
         num_freq: number of frequencies
         fmax: highest frequency (Hz)
@@ -341,8 +347,12 @@ class EEGComputations:
         """
         # from scipy.signal import spectrogram        
 
+        # Exclude BAD channels (e.g. from time_independent_bad_channels) so they are not included in spectrograms.
+        bads = set(raw.info.get("bads") or [])
         if picks is None:
-            picks = mne.pick_types(raw.info, eeg=True, meg=False)
+            picks = mne.pick_types(raw.info, eeg=True, meg=False, exclude='bads')
+        else:
+            picks = [p for p in picks if raw.info.ch_names[p] not in bads]
 
         fs: float = raw.info["sfreq"]
 
@@ -359,15 +369,13 @@ class EEGComputations:
         else:
             data = raw.get_data(picks=picks)
 
-        ch_names = deepcopy(raw.info.ch_names)
-        # raw = deepcopy(raw)
-        # raw.down_convert_to_base_type()
+        ch_names = [raw.info.ch_names[i] for i in picks]
         Sxx_list = []
         Sxx_avg_list = []
         
         spectogram_result_dict = {}
-        for ch_idx, a_ch in enumerate(raw.info.ch_names):
-            f, t, Sxx = spectrogram(data[ch_idx], fs=fs, nperseg=nperseg, noverlap=noverlap) # #TODO 2025-09-28 13:25: - [ ] Convert to newer `ShortTimeFFT.spectrogram`
+        for row_idx, a_ch in enumerate(ch_names):
+            f, t, Sxx = spectrogram(data[row_idx], fs=fs, nperseg=nperseg, noverlap=noverlap) # #TODO 2025-09-28 13:25: - [ ] Convert to newer `ShortTimeFFT.spectrogram`
             spectogram_result_dict[a_ch] = (f, t, Sxx) ## a tuple
             Sxx_list.append(Sxx) # np.shape(Sxx) # (513, 1116) - (n_freqs, n_times)
             Sxx_avg = np.nanmean(Sxx, axis=-1) ## average over all time to get one per session
@@ -386,8 +394,146 @@ class EEGComputations:
                                         Sxx_avg=Sxx_avg_list,
                                         Sxx=Sxx_list,
                                         )
-    
 
+
+    @classmethod
+    def time_independent_bad_channels(cls, raw: mne.io.Raw, **kwargs) -> dict:
+        """Detect low-quality EEG channels across the entire recording using pyprep.
+
+        Uses ``pyprep.prep_pipeline`` on the entire EEG recording without gaps
+
+        """
+        _empty_out = dict(interpolated_channels=[], bad_channels_original=[], still_noisy_channels=[], noisy_channels_after_interpolation={}, all_bad_channels=[])
+
+        try:
+            from pyprep.prep_pipeline import PrepPipeline
+        except ImportError:
+            import warnings
+            warnings.warn("pyprep is not installed; skipping time-independent bad-channel detection. Install with: uv add pyprep", RuntimeWarning, stacklevel=2)
+            return _empty_out
+
+        try:
+            # Extract some info
+            sample_rate = raw.info["sfreq"]
+            montage = raw.get_montage()
+            # Make a copy of the data
+            raw_copy = raw.copy()
+
+            # Fit prep
+            prep_params = {
+                "ref_chs": "eeg",
+                "reref_chs": "eeg",
+                "line_freqs": np.arange(60, sample_rate / 2, 60),
+            }
+
+            prep = PrepPipeline(raw_copy, prep_params, montage)
+            prep.fit()
+
+            interpolated_channels = list(prep.interpolated_channels)
+            noisy_channels_original = dict(prep.noisy_channels_original)
+            bad_channels_original = list(noisy_channels_original.get("bad_all", []))
+            still_noisy_channels = list(prep.still_noisy_channels)
+            noisy_channels_after_interpolation = dict(prep.noisy_channels_after_interpolation)
+
+            print(f"Bad channels: {interpolated_channels}")
+            print(f"Bad channels original: {bad_channels_original}")
+            print(f"Bad channels after interpolation: {still_noisy_channels}")
+
+            # Union of all detected bad channels so downstream stages can skip them.
+            all_bad_channels = sorted(set(bad_channels_original) | set(still_noisy_channels))
+
+            # Persist bad channels onto the original Raw object for subsequent computations.
+            raw.info["bads"] = sorted(set(list(raw.info.get("bads") or []) + all_bad_channels))
+
+            return dict(interpolated_channels=interpolated_channels, bad_channels_original=bad_channels_original, still_noisy_channels=still_noisy_channels, noisy_channels_after_interpolation=noisy_channels_after_interpolation, all_bad_channels=all_bad_channels)
+
+        except Exception as e:
+            import warnings
+            warnings.warn(f"PrepPipeline failed ({type(e).__name__}: {e}); no channels marked bad.", RuntimeWarning, stacklevel=2)
+            return _empty_out
+
+
+    @classmethod
+    def time_dependent_bad_channels(cls, raw: mne.io.Raw, window_sec: float = 3.0, picks=None, n_neighbors: int = 20, threshold: float = 1.5, return_scores: bool = False, **kwargs) -> dict:
+        """Detect low-quality EEG channels in fixed-duration windows using LOF.
+
+        Uses ``mne.preprocessing.find_bad_channels_lof`` on each non-overlapping
+        window of ``window_sec`` length.
+        """
+        if window_sec <= 0:
+            raise ValueError(f"window_sec must be > 0, got {window_sec}")
+
+        if picks is None:
+            picks = mne.pick_types(raw.info, eeg=True, meg=False)
+        elif isinstance(picks, (list, tuple, np.ndarray)) and len(picks) > 0 and isinstance(picks[0], str):
+            picks = mne.pick_channels(raw.info["ch_names"], include=list(picks), exclude=[])
+        else:
+            picks = np.atleast_1d(np.asarray(picks, dtype=int).ravel())
+
+        n_channels = int(picks.size)
+        if n_channels == 0:
+            empty_df = pd.DataFrame(columns=["t_start", "t_end", "n_bad", "bad_channels"])
+            out = dict(window_sec=float(window_sec), intervals=[], bad_channels_per_interval=[], df=empty_df)
+            if return_scores:
+                out["scores_per_interval"] = []
+            return out
+
+        if n_neighbors < 1:
+            raise ValueError(f"n_neighbors must be >= 1, got {n_neighbors}")
+
+        effective_n_neighbors = max(1, min(int(n_neighbors), n_channels - 1)) if n_channels > 1 else 1
+        sfreq = float(raw.info["sfreq"])
+        n_times = int(raw.n_times)
+        samples_per_window = max(1, int(round(window_sec * sfreq)))
+
+        intervals = []
+        bad_channels_per_interval = []
+        scores_per_interval = []
+
+        for start_idx in range(0, n_times, samples_per_window):
+            end_idx = min(start_idx + samples_per_window, n_times)  # exclusive
+            if end_idx <= start_idx:
+                continue
+
+            t_start = start_idx / sfreq
+            t_end = end_idx / sfreq
+            crop_tmax = (end_idx - 1) / sfreq
+            raw_seg = raw.copy().crop(tmin=t_start, tmax=crop_tmax, include_tmax=True)
+
+            if n_channels < 3:
+                bads = []
+                scores = np.full(n_channels, np.nan, dtype=float)
+            else:
+                try:
+                    if return_scores:
+                        bads, scores = mne.preprocessing.find_bad_channels_lof(raw_seg, n_neighbors=effective_n_neighbors, picks=picks, threshold=threshold, return_scores=True)
+                    else:
+                        bads = mne.preprocessing.find_bad_channels_lof(raw_seg, n_neighbors=effective_n_neighbors, picks=picks, threshold=threshold, return_scores=False)
+                        scores = None
+                except Exception as e:
+                    print(f'\tLOF error in window [{t_start:.3f}, {t_end:.3f}] sec: {e}')
+                    bads = []
+                    scores = np.full(n_channels, np.nan, dtype=float) if return_scores else None
+
+            intervals.append((t_start, t_end))
+            bad_channels_per_interval.append(list(bads))
+            if return_scores:
+                score_arr = np.asarray(scores, dtype=float).ravel()
+                if score_arr.shape[0] != n_channels:
+                    fixed_scores = np.full(n_channels, np.nan, dtype=float)
+                    fixed_scores[:min(n_channels, score_arr.shape[0])] = score_arr[:min(n_channels, score_arr.shape[0])]
+                    score_arr = fixed_scores
+                scores_per_interval.append(score_arr)
+
+        rows = []
+        for (t_start, t_end), bad_channels in zip(intervals, bad_channels_per_interval):
+            rows.append(dict(t_start=t_start, t_end=t_end, n_bad=len(bad_channels), bad_channels=bad_channels))
+        out_df = pd.DataFrame.from_records(rows, columns=["t_start", "t_end", "n_bad", "bad_channels"])
+
+        out = dict(window_sec=float(window_sec), intervals=intervals, bad_channels_per_interval=bad_channels_per_interval, df=out_df)
+        if return_scores:
+            out["scores_per_interval"] = scores_per_interval
+        return out
 
 
     @classmethod

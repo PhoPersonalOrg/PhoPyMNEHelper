@@ -1,6 +1,6 @@
 [project]
 name = "phopymnehelper"
-version = "0.2.1"
+version = "0.2.2"
 description = "Wrappers for common MNE utilities, such as my personal electrode/head mesh configs"
 readme = "README.md"
 requires-python = ">=3.10,<3.12"
@@ -15,6 +15,8 @@ dependencies = [
     "mne>=1.8.0",
     "xarray[complete]>=2024.3.0",
     "h5py>=3.14.0",
+    "scikit-learn>=1.7.2",
+    "pyprep>=0.6.0",
 ]
 
 [tool.pyrefly]
