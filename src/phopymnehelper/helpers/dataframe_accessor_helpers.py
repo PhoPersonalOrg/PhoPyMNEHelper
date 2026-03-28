@@ -176,7 +176,9 @@ class MaskedValidDataFrameAccessor:
         df = self._obj
         available = set(df.columns)
         if mask_col not in available:
-            raise KeyError(f"mask_col {mask_col!r} not found; available: {sorted(available)}")
+            print(f"mask_col '{mask_col}' not found; available columns: {sorted(available)}")
+            df[mask_col] = True ## default to True
+            # raise KeyError(f"mask_col {mask_col!r} not found; available: {sorted(available)}")
         value_cols_list = list(value_cols)
         missing = [c for c in value_cols_list if c not in available]
         if missing:
