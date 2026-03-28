@@ -98,10 +98,14 @@ class MaskedValidDataFrameAccessor:
     @property
     def mask_col_names(self) -> List[str]:
         """Get or set the list of mask column names stored in DataFrame.attrs['mask_col_names']"""
-        return self._obj.attrs.get('mask_col_names', None)
+        if self._obj.attrs is None:
+            self._obj.attrs = {'mask_col_names': []} # create a new metadata dict on the dataframe
+        return self._obj.attrs.get('mask_col_names', [])
     @mask_col_names.setter
     def mask_col_names(self, value: List[str]):
         """Set the list of mask column names in DataFrame.attrs['mask_col_names']"""
+        if self._obj.attrs is None:
+            self._obj.attrs = {'mask_col_names': []} # create a new metadata dict on the dataframe
         self._obj.attrs['mask_col_names'] = value
 
 
@@ -149,16 +153,17 @@ class MaskedValidDataFrameAccessor:
 
 
 
-    def apply_mask(self, mask_col: str, value_cols: Sequence[str], *, copy: bool = True) -> pd.DataFrame:
+    def add_masking_column(self, mask_col: str, value_cols: Sequence[str], *, copy: bool = True) -> pd.DataFrame:
         """ 
         Usage:
             from phopymnehelper.helpers.dataframe_accessor_helpers import MaskedValidDataFrameAccessor
 
-            masked_detailed_eeg_df: pd.DataFrame = detailed_eeg_df.masked_df.apply_mask(mask_col='is_valid', value_cols=['AF3', 'F7', 'F3', 'FC5', 'T7', 'P7', 'O1', 'O2', 'P8', 'T8', 'FC6', 'F4', 'F8', 'AF4'],
+            masked_detailed_eeg_df: pd.DataFrame = detailed_eeg_df.masked_df.add_masking_column(mask_col='is_valid', value_cols=['AF3', 'F7', 'F3', 'FC5', 'T7', 'P7', 'O1', 'O2', 'P8', 'T8', 'FC6', 'F4', 'F8', 'AF4'],
                                                                 copy=True)
             masked_detailed_eeg_df
 
         """
+        # assert mask_col not in self.mask_col_names, f"mask_col: {mask_col}, self.mask_col_names: {self.mask_col_names}"
 
         df = self._obj
         available = set(df.columns)
@@ -170,16 +175,23 @@ class MaskedValidDataFrameAccessor:
             raise KeyError(f"value_cols not in DataFrame: {missing}")
         if mask_col in value_cols_list:
             raise ValueError("mask_col must not appear in value_cols")
-        if not value_cols_list:
-            return df.copy(deep=copy)
-        m = df[mask_col]
-        if not pd.api.types.is_bool_dtype(m):
-            m = m.astype("boolean").fillna(False).astype(bool)
-        else:
-            m = m.fillna(False)
-        out = df.copy(deep=copy)
-        out[value_cols_list] = df[value_cols_list].where(m, pd.NA)
-        return out
+
+        # if not value_cols_list:
+        #     return df.copy(deep=copy)
+        # m = df[mask_col]
+        # if not pd.api.types.is_bool_dtype(m):
+        #     m = m.astype("boolean").fillna(False).astype(bool)
+        # else:
+        #     m = m.fillna(False)
+        # out = df.copy(deep=copy)
+        # out[value_cols_list] = df[value_cols_list].where(m, pd.NA)
+        # out.mask_col_names.append(mask_col)
+
+        if mask_col not in self.mask_col_names:
+            self.mask_col_names.append(mask_col)
+        return self.get_masked(copy=copy)
+
+        # return out
 
 
     def masking_by_intervals(self, mask_bad_intervals_df: pd.DataFrame, time_col_name: str = 't', bool_mask_column_name: str = 'is_bad_motion', intervals_start_col_name: str = 'onset', intervals_end_col_name: str = 'onset_end') -> pd.DataFrame:
