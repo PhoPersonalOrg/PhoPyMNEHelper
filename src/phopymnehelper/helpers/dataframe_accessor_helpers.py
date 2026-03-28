@@ -1,12 +1,12 @@
 from collections import namedtuple
 from copy import deepcopy
 from itertools import islice
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 import nptyping as ND
 from nptyping import NDArray
 import numpy as np
 import pandas as pd
-
+import polars as pl
 
 class CommonDataFrameAccessorMixin(object):
     """ A Pandas pd.DataFrame representation of [start, stop, label] epoch intervals 
@@ -61,4 +61,86 @@ class CommonDataFrameAccessorMixin(object):
         if self._obj.attrs is None:
             self._obj.attrs = {} # create a new metadata dict on the dataframe
         self._obj.attrs.update(**metadata_update_kwargs)
+        return self._obj
+
+
+
+# uv add polars[all]
+
+
+@pd.api.extensions.register_dataframe_accessor("masked_df")
+class MaskedValidDataFrameAccessor:
+    """DataFrame accessor: replace values with ``pd.NA`` in selected columns where a boolean mask column is False.
+
+    Where ``mask_col`` is True, values in ``value_cols`` are kept. Where False, those cells become ``pd.NA``.
+    Rows with NA in ``mask_col`` are treated as False (masked). Non-boolean ``mask_col`` dtypes are cast with
+    ``astype(bool)``. All other columns are unchanged.
+
+    Usage::
+
+        import pandas as pd
+        from phopymnehelper.helpers.dataframe_accessor_helpers import MaskedValidDataFrameAccessor
+
+        out = df.masked_df.apply_mask("is_valid", ["x", "y"])
+        out_shallow = df.masked_df.apply_mask("is_valid", ["x", "y"], copy=False)
+
+    Args:
+        copy: If True (default), use ``DataFrame.copy(deep=True)`` before applying the mask. If False, use
+            ``copy(deep=False)`` so unmodified columns may share memory with the original until written.
+    """
+
+    def __init__(self, pandas_obj: pd.DataFrame) -> None:
+        if not isinstance(pandas_obj, pd.DataFrame):
+            raise TypeError("masked_df accessor requires a pandas.DataFrame")
+        self._obj = pandas_obj
+
+
+    def apply_mask(self, mask_col: str, value_cols: Sequence[str], *, copy: bool = True) -> pd.DataFrame:
+        df = self._obj
+        available = set(df.columns)
+        if mask_col not in available:
+            raise KeyError(f"mask_col {mask_col!r} not found; available: {sorted(available)}")
+        value_cols_list = list(value_cols)
+        missing = [c for c in value_cols_list if c not in available]
+        if missing:
+            raise KeyError(f"value_cols not in DataFrame: {missing}")
+        if mask_col in value_cols_list:
+            raise ValueError("mask_col must not appear in value_cols")
+        if not value_cols_list:
+            return df.copy(deep=copy)
+        m = df[mask_col]
+        if not pd.api.types.is_bool_dtype(m):
+            m = m.astype("boolean").fillna(False).astype(bool)
+        else:
+            m = m.fillna(False)
+        out = df.copy(deep=copy)
+        out[value_cols_list] = df[value_cols_list].where(m, pd.NA)
+        return out
+
+
+    def mask_by_intervals(self, mask_bad_intervals_df: pd.DataFrame, time_col_name: str = 't', bool_mask_column_name: str = 'is_bad_motion', 
+            intervals_start_col_name: str='onset', intervals_end_col_name: str='onset_end',
+            ):
+        """ 
+        time_col_name: point-like time column to be checked to see if overlaps the intervals in mask_bad_intervals_df
+        bool_mask_column_name: column to be added
+        """
+        import polars as pl
+
+        lf = pl.from_pandas(self._obj).lazy()
+        iv = pl.from_pandas(mask_bad_intervals_df).select(intervals_start_col_name, intervals_end_col_name).lazy()
+
+        bad_t = (
+            lf.join(iv, how="cross")
+            .filter((pl.col(time_col_name) >= pl.col(intervals_start_col_name)) & (pl.col(time_col_name) <= pl.col(intervals_end_col_name)))
+            .select(time_col_name)
+            .unique()
+            .with_columns(pl.lit(True).alias(bool_mask_column_name))
+        )
+
+        df = lf.join(bad_t, on=time_col_name, how="left").with_columns(
+            pl.col(bool_mask_column_name).fill_null(False)
+        ).collect()
+
+        self._obj = df.to_pandas()  # if you need pandas again
         return self._obj
