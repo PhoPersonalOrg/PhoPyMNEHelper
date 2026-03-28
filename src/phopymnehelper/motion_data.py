@@ -539,7 +539,7 @@ class BadMotionDataFrame(CommonDataFrameAccessorMixin):
             # self._obj['t_start'] = self._obj['onset'].map(cls._motion_bad_cell_to_unix_seconds)
             self._obj['t_start'] = self._detail_t_column_to_unix_numpy(self._obj['onset']) #.map(cls._motion_bad_cell_to_unix_seconds)
             self._obj['t_duration'] = self._obj['duration'].dt.total_seconds()
-
+            ## add the optional end/stop columns:
             self._obj['onset_end'] = self._obj['onset'] + self._obj['duration']
             self._obj['t_stop'] = self._obj['t_start'] + self._obj['t_duration']
             return self._obj
@@ -547,6 +547,7 @@ class BadMotionDataFrame(CommonDataFrameAccessorMixin):
             df: pd.DataFrame = self._obj.copy()
             df['t_start'] = self._detail_t_column_to_unix_numpy(df['onset']) #.map(cls._motion_bad_cell_to_unix_seconds)
             df['t_duration'] = df['duration'].dt.total_seconds()
+            ## add the optional end/stop columns:
             df['onset_end'] = df['onset'] + df['duration']
             df['t_stop'] = df['t_start'] + df['t_duration']
 
