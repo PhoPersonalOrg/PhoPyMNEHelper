@@ -51,20 +51,56 @@ class MotionData:
 
     
     @classmethod
-    def find_high_accel_periods(cls, a_ds: mne.io.Raw, total_accel_threshold: float = 0.5, should_set_bad_period_annotations: bool=True, **set_annotations_kwargs) -> Tuple[mne.Annotations, pd.DataFrame]:
+    def find_high_accel_periods(cls, a_ds: Union[mne.io.Raw, pd.DataFrame], total_accel_threshold: float = 0.5, should_set_bad_period_annotations: bool=True, minimum_bad_duration: Optional[float]=None, **set_annotations_kwargs) -> Tuple[mne.Annotations, pd.DataFrame]:
         """ finds periods of high acceleration in the dataset and returns annotations for those periods.
+
+        ``minimum_bad_duration`` is in seconds when the epoch ``duration`` column is numeric or ``timedelta64`` (compared via total seconds).
+
+        Usage:
+            from phopymnehelper.motion_data import MotionData
+            from phopymnehelper.MNE_helpers import MNEHelpers
+
+            motion_widget, motion_track, motion_ds = timeline.get_track_tuple('MOTION_Epoc X Motion')
+
+            total_accel_threshold: float = 0.5
+
+            # a_motion_df: pd.DataFrame = motion_ds.detailed_df.copy() # a_ds.to_data_frame()       
+            # a_motion_df: pd.DataFrame = MotionData.compute_rolling_motion_change_detection(a_df=a_motion_df, total_change_threshold=total_accel_threshold, enable_global_normalization=True)
+            is_moving_annots, is_moving_annots_df = MotionData.find_high_accel_periods(a_ds=motion_ds.detailed_df, total_change_threshold=total_accel_threshold, should_set_bad_period_annotations=False, minimum_bad_duration=1e-3) # at least 1ms in duration to prevent tons of tiny intervals
+
+            motion_ds.detailed_df
+
         """
         from phopymnehelper.MNE_helpers import MNEHelpers
 
-        meas_date = deepcopy(a_ds.info['meas_date'])
-        # a_ds = motion_datasets[-1]
-        a_motion_df: pd.DataFrame = a_ds.to_data_frame()       
+        if not isinstance(a_ds, pd.DataFrame):
+            meas_date = deepcopy(a_ds.info['meas_date'])
+            # a_ds = motion_datasets[-1]
+            a_motion_df: pd.DataFrame = a_ds.to_data_frame()
+            time_col_names: str = 'time'
+
+        else:
+            assert (not should_set_bad_period_annotations), f"should_set_bad_period_annotations is True but a pd.DataFrame was passed instead of a mne.io.Raw object."
+            meas_date = set_annotations_kwargs.pop('meas_date', None)
+
+            a_motion_df: pd.DataFrame = a_ds
+            time_col_names: str = 't'
+
+        assert time_col_names in a_motion_df.columns
+
         a_motion_df: pd.DataFrame = cls.compute_rolling_motion_change_detection(a_df=a_motion_df, total_change_threshold=total_accel_threshold, enable_global_normalization=True)
 
         # annots: mne.Annotations = MNEHelpers.convert_df_with_boolean_col_to_epochs(deepcopy(a_motion_df), is_bad_col_name="is_moving", annotation_description_name="BAD_motion", time_col_names='time', meas_date=meas_date) # , **kwargs
         
-        is_moving_annots_df: pd.DataFrame = MNEHelpers.convert_df_with_boolean_col_to_epochs(deepcopy(a_motion_df), is_bad_col_name="is_moving", annotation_description_name="BAD_motion", time_col_names='time')        
-        is_moving_annots: mne.Annotations = mne.Annotations(onset=is_moving_annots_df['onset'].to_numpy(), duration=is_moving_annots_df['duration'].to_numpy(), description=is_moving_annots_df['description'].to_numpy(), orig_time=meas_date)
+        is_moving_annots_df: pd.DataFrame = MNEHelpers.convert_df_with_boolean_col_to_epochs(deepcopy(a_motion_df), is_bad_col_name="is_moving", annotation_description_name="BAD_motion", time_col_names=time_col_names)
+        if (minimum_bad_duration is not None) and (minimum_bad_duration > 0.0):
+            _dur = is_moving_annots_df['duration']
+            _dur_cmp = _dur.dt.total_seconds() if pd.api.types.is_timedelta64_dtype(_dur.dtype) else _dur
+            is_moving_annots_df = is_moving_annots_df[_dur_cmp >= minimum_bad_duration].reset_index(drop=True)
+
+        _dur_out = is_moving_annots_df['duration']
+        _duration_np = _dur_out.dt.total_seconds().to_numpy(dtype=float) if pd.api.types.is_timedelta64_dtype(_dur_out.dtype) else _dur_out.to_numpy()
+        is_moving_annots: mne.Annotations = mne.Annotations(onset=is_moving_annots_df['onset'].to_numpy(), duration=_duration_np, description=is_moving_annots_df['description'].to_numpy(), orig_time=meas_date)
 
 
         if should_set_bad_period_annotations:
