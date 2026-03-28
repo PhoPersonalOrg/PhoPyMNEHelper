@@ -14,10 +14,10 @@ from benedict import benedict
 from phopylslhelper.general_helpers import unwrap_single_element_listlike_if_needed, readable_dt_str
 from phopylslhelper.easy_time_sync import EasyTimeSyncParsingMixin
 from phopymnehelper.SavedSessionsProcessor import DataModalityType #TODO: move somewhere common
-
+from phopymnehelper.helpers.dataframe_accessor_helpers import CommonDataFrameAccessorMixin
 
 @pd.api.extensions.register_dataframe_accessor("xdf_streams")
-class XDFDataStreamAccessor(object):
+class XDFDataStreamAccessor(CommonDataFrameAccessorMixin):
     """ A Pandas pd.DataFrame representation of [start, stop, label] epoch intervals 
     
     from phopymnehelper.xdf_files import XDFDataStreamAccessor, LabRecorderXDF
@@ -33,9 +33,9 @@ class XDFDataStreamAccessor(object):
 
     # _required_column_names = ['start', 'stop', 'label', 'duration']
 
-    def __init__(self, pandas_obj):      
-        pandas_obj = self._validate(pandas_obj)
-        self._obj = pandas_obj
+    # def __init__(self, pandas_obj):      
+    #     pandas_obj = self._validate(pandas_obj)
+    #     self._obj = pandas_obj
 
     @classmethod
     def init_from_results(cls, _out_xdf_stream_infos_df: pd.DataFrame, active_only_out_eeg_raws: List, max_num_to_process: Optional[int] = None):
@@ -190,42 +190,43 @@ class XDFDataStreamAccessor(object):
 
 
 
-    @classmethod
-    def _validate(cls, obj):
-        """ verify there is a column that identifies the spike's neuron, the type of cell of this neuron ('neuron_type'), and the timestamp at which each spike occured ('t'||'t_rel_seconds') """       
-        return obj # important! Must return the modified obj to be assigned (since its columns were altered by renaming
+    # @classmethod
+    # def _validate(cls, obj):
+    #     """ verify there is a column that identifies the spike's neuron, the type of cell of this neuron ('neuron_type'), and the timestamp at which each spike occured ('t'||'t_rel_seconds') """       
+    #     return obj # important! Must return the modified obj to be assigned (since its columns were altered by renaming
 
 
-    @property
-    def extra_data_column_names(self):
-        """Any additional columns in the dataframe beyond those that exist by default. """
-        return list(set(self._obj.columns) - set(self._required_column_names))
+    # @property
+    # def extra_data_column_names(self):
+    #     """Any additional columns in the dataframe beyond those that exist by default. """
+    #     return list(set(self._obj.columns) - set(self._required_column_names))
 
-    @property
-    def extra_data_dataframe(self) -> pd.DataFrame:
-        """The subset of the dataframe containing additional information in its columns beyond that what is required. """
-        return self._obj[self.extra_data_column_names]
+    # @property
+    # def extra_data_dataframe(self) -> pd.DataFrame:
+    #     """The subset of the dataframe containing additional information in its columns beyond that what is required. """
+    #     return self._obj[self.extra_data_column_names]
 
     # def as_array(self) -> NDArray:
     #     return self._obj[["start", "stop"]].to_numpy()
 
 
-    def adding_or_updating_metadata(self, **metadata_update_kwargs) -> pd.DataFrame:
-        """ updates the dataframe's `df.attrs` dictionary metadata, building it as a new dict if it doesn't yet exist
+    # def adding_or_updating_metadata(self, **metadata_update_kwargs) -> pd.DataFrame:
+    #     """ updates the dataframe's `df.attrs` dictionary metadata, building it as a new dict if it doesn't yet exist
 
-        Usage:
-            from neuropy.core.epoch import Epoch, EpochsAccessor, NamedTimerange, ensure_dataframe, ensure_Epoch
+    #     Usage:
+    #         from neuropy.core.epoch import Epoch, EpochsAccessor, NamedTimerange, ensure_dataframe, ensure_Epoch
 
-            maze_epochs_df = deepcopy(curr_active_pipeline.sess.epochs).to_dataframe()
-            maze_epochs_df = maze_epochs_df.epochs.adding_or_updating_metadata(train_test_period='train')
-            maze_epochs_df
+    #         maze_epochs_df = deepcopy(curr_active_pipeline.sess.epochs).to_dataframe()
+    #         maze_epochs_df = maze_epochs_df.epochs.adding_or_updating_metadata(train_test_period='train')
+    #         maze_epochs_df
 
-        """
-        ## Add the metadata:
-        if self._obj.attrs is None:
-            self._obj.attrs = {} # create a new metadata dict on the dataframe
-        self._obj.attrs.update(**metadata_update_kwargs)
-        return self._obj
+    #     """
+    #     ## Add the metadata:
+    #     if self._obj.attrs is None:
+    #         self._obj.attrs = {} # create a new metadata dict on the dataframe
+    #     self._obj.attrs.update(**metadata_update_kwargs)
+    #     return self._obj
+
 
 
 @define(slots=False)
