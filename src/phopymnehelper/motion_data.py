@@ -20,6 +20,7 @@ mne.viz.set_browser_backend("Matplotlib")
 
 # from ..EegProcessing import bandpower
 from numpy.typing import NDArray
+from phopymnehelper.helpers.dataframe_accessor_helpers import CommonDataFrameAccessorMixin
 
 set_log_level("WARNING")
 
@@ -430,3 +431,89 @@ class MotionData:
         ax.set_zlabel('Z axis')
         ax.set_title('3D Orientation from Quaternion')
         plt.show()
+
+
+
+
+
+
+
+@pd.api.extensions.register_dataframe_accessor("motion_df")
+class MotionDataFrame(CommonDataFrameAccessorMixin):
+    """ A Pandas pd.DataFrame representation of [start, stop, label] epoch intervals 
+    
+    from phopymnehelper.motion_data import MotionDataFrame
+
+    """
+    timestamp_dt_column_names = ['t_start', 't_duration']
+    timestamp_rel_column_names = ['onset', 'duration']
+
+    _required_column_names = ['start', 'stop', 'label', 'duration']
+
+    def __init__(self, pandas_obj):      
+        pandas_obj = self._validate(pandas_obj)
+        self._obj = pandas_obj
+
+
+
+@pd.api.extensions.register_dataframe_accessor("bad_motion_epochs_df")
+class BadMotionDataFrame(CommonDataFrameAccessorMixin):
+    """ A Pandas pd.DataFrame representation of [start, stop, label] epoch intervals 
+    
+    from phopymnehelper.motion_data import MotionDataFrame, BadMotionDataFrame
+
+    """
+    timestamp_dt_column_names = ['t_start', 't_duration']
+    timestamp_rel_column_names = ['onset', 'duration']
+
+    _required_column_names = ['start', 'stop', 'label', 'duration']
+
+    def __init__(self, pandas_obj):      
+        pandas_obj = self._validate(pandas_obj)
+        self._obj = pandas_obj
+
+    def is_timestamp_format(self) -> bool:
+        return np.all([v in self._obj.columns for v in self.timestamp_rel_column_names])
+
+    @classmethod
+    def _motion_bad_cell_to_unix_seconds(cls, x: Any) -> float:
+        if isinstance(x, (datetime, pd.Timestamp)):
+            return float(datetime_to_unix_timestamp(x))
+        return float(x)
+
+    @classmethod
+    def _detail_t_column_to_unix_numpy(cls, t_col: pd.Series) -> np.ndarray:
+        if pd.api.types.is_datetime64_any_dtype(t_col):
+            return np.asarray(datetime_to_unix_timestamp(t_col.tolist()), dtype=np.float64)
+        return np.asarray(t_col.to_numpy(dtype=np.float64, copy=False), dtype=np.float64)
+
+
+    @classmethod
+    def motion_bad_intervals_key_suffix(cls, bad_unix_df: pd.DataFrame) -> str:
+        if bad_unix_df is None or len(bad_unix_df) == 0:
+            return ''
+        rows = sorted((round(float(r.t_start), 6), round(float(r.t_duration), 6)) for r in bad_unix_df.itertuples(index=False))
+        return hashlib.md5(repr(rows).encode('utf-8')).hexdigest()[:12]
+
+
+    @classmethod
+    def normalize_motion_bad_intervals_df(cls, bad_df: Optional[pd.DataFrame], time_origin_unix: Optional[float] = None) -> pd.DataFrame:
+        """Build a DataFrame with float Unix ``t_start`` and ``t_duration`` for motion bad/exclusion intervals.
+
+        Accepts either timeline-style columns ``t_start``/``t_duration`` (Unix seconds or datetimes), or MNE-style
+        ``onset``/``duration`` (seconds relative to recording start) plus ``time_origin_unix`` (recording start, Unix s).
+        """
+        if bad_df is None or len(bad_df) == 0:
+            return pd.DataFrame(columns=['t_start', 't_duration'])
+        df = bad_df.copy()
+        if 't_start' in df.columns and 't_duration' in df.columns:
+            t_st = df['t_start'].map(cls._motion_bad_cell_to_unix_seconds)
+            t_du = df['t_duration'].astype(float)
+            return pd.DataFrame({'t_start': t_st, 't_duration': t_du}).reset_index(drop=True)
+        if 'onset' in df.columns and 'duration' in df.columns:
+            if time_origin_unix is None:
+                raise ValueError("bad_intervals_df uses MNE columns 'onset' and 'duration'; pass bad_intervals_time_origin_unix (recording start as Unix seconds).")
+            return pd.DataFrame({'t_start': time_origin_unix + df['onset'].astype(float), 't_duration': df['duration'].astype(float)}).reset_index(drop=True)
+        raise ValueError("bad_intervals_df must have columns ('t_start', 't_duration') or ('onset', 'duration').")
+
+
