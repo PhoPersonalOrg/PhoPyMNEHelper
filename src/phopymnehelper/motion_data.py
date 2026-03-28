@@ -1,6 +1,8 @@
 import time
+import hashlib
 import re
 from datetime import datetime, timezone
+from pypho_timeline.utils.datetime_helpers import datetime_to_unix_timestamp
 
 import uuid
 from copy import deepcopy
@@ -492,7 +494,11 @@ class BadMotionDataFrame(CommonDataFrameAccessorMixin):
     def motion_bad_intervals_key_suffix(cls, bad_unix_df: pd.DataFrame) -> str:
         if bad_unix_df is None or len(bad_unix_df) == 0:
             return ''
-        rows = sorted((round(float(r.t_start), 6), round(float(r.t_duration), 6)) for r in bad_unix_df.itertuples(index=False))
+        is_timestamp_format: bool = np.all([v in bad_unix_df.columns for v in cls.timestamp_rel_column_names])
+        if is_timestamp_format:
+            rows = sorted((round(cls._motion_bad_cell_to_unix_seconds(r.onset), 6), round(float(r.duration.total_seconds()), 6)) for r in bad_unix_df.itertuples(index=False))
+        else:
+            rows = sorted((round(float(r.t_start), 6), round(float(r.t_duration), 6)) for r in bad_unix_df.itertuples(index=False))
         return hashlib.md5(repr(rows).encode('utf-8')).hexdigest()[:12]
 
 
@@ -504,16 +510,45 @@ class BadMotionDataFrame(CommonDataFrameAccessorMixin):
         ``onset``/``duration`` (seconds relative to recording start) plus ``time_origin_unix`` (recording start, Unix s).
         """
         if bad_df is None or len(bad_df) == 0:
-            return pd.DataFrame(columns=['t_start', 't_duration'])
+            return pd.DataFrame(columns=cls.timestamp_dt_column_names)
         df = bad_df.copy()
-        if 't_start' in df.columns and 't_duration' in df.columns:
+        
+        if 'onset' in df.columns and 'duration' in df.columns:
+            # if time_origin_unix is None:
+            #     raise ValueError("bad_intervals_df uses MNE columns 'onset' and 'duration'; pass bad_intervals_time_origin_unix (recording start as Unix seconds).")
+            # return pd.DataFrame({'t_start': time_origin_unix + df['onset'].astype(float), 't_duration': df['duration'].astype(float)}).reset_index(drop=True)
+            return df
+
+        elif 't_start' in df.columns and 't_duration' in df.columns:
             t_st = df['t_start'].map(cls._motion_bad_cell_to_unix_seconds)
             t_du = df['t_duration'].astype(float)
             return pd.DataFrame({'t_start': t_st, 't_duration': t_du}).reset_index(drop=True)
-        if 'onset' in df.columns and 'duration' in df.columns:
-            if time_origin_unix is None:
-                raise ValueError("bad_intervals_df uses MNE columns 'onset' and 'duration'; pass bad_intervals_time_origin_unix (recording start as Unix seconds).")
-            return pd.DataFrame({'t_start': time_origin_unix + df['onset'].astype(float), 't_duration': df['duration'].astype(float)}).reset_index(drop=True)
-        raise ValueError("bad_intervals_df must have columns ('t_start', 't_duration') or ('onset', 'duration').")
+        else:
+            raise ValueError("bad_intervals_df must have columns ('t_start', 't_duration') or ('onset', 'duration').")
 
 
+    def adding_unix_float_columns(self, inplace: bool=True) -> pd.DataFrame:
+        """ creates the unix_float columns 
+
+        Adds columns: `timestamp_dt_column_names = ['t_start', 't_duration']`
+        Requires existing columns: `timestamp_rel_column_names = ['onset', 'duration']`
+
+        """
+        assert self.is_timestamp_format(), f"expected timestamp columns: {self.timestamp_rel_column_names} but had self._obj.columns: {self._obj.columns}" #_obj
+        if inplace:
+            # self._obj['t_start'] = self._obj['onset'].map(cls._motion_bad_cell_to_unix_seconds)
+            self._obj['t_start'] = self._detail_t_column_to_unix_numpy(self._obj['onset']) #.map(cls._motion_bad_cell_to_unix_seconds)
+            self._obj['t_duration'] = self._obj['duration'].dt.total_seconds()
+
+            self._obj['onset_end'] = self._obj['onset'] + self._obj['duration']
+            self._obj['t_stop'] = self._obj['t_start'] + self._obj['t_duration']
+            return self._obj
+        else:
+            df: pd.DataFrame = self._obj.copy()
+            df['t_start'] = self._detail_t_column_to_unix_numpy(df['onset']) #.map(cls._motion_bad_cell_to_unix_seconds)
+            df['t_duration'] = df['duration'].dt.total_seconds()
+            df['onset_end'] = df['onset'] + df['duration']
+            df['t_stop'] = df['t_start'] + df['t_duration']
+
+
+            return df
