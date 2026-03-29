@@ -25,6 +25,6 @@
 PhoPyMNEHelper currently hosts concrete analysis helpers rather than a full orchestration engine. Useful entry points:
 
 - [`EEGComputations`](../EEG_data.py) — Batch-oriented helpers on `mne.io.Raw` (e.g. spectrogram, continuous wavelet transform, topo-style pipelines).
-- [`analysis/computations/`](computations/) — Additional computation modules (for example, fatigue-related metrics in `fatigue_analysis.py`).
+- [`analysis/computations/`](computations/) — Additional computation modules (for example, fatigue-related metrics in `fatigue_analysis.py`, and theta/delta sleep-intrusion style pipelines in `computations/specific/ADHD_sleep_intrusions.py`).
 
 Caching, explicit dependency declarations between computations, and custom renderers are not defined solely in this folder; they are part of the broader contract above.
