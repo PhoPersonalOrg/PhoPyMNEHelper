@@ -763,13 +763,13 @@ class LabRecorderXDF:
 
             # raise e
 
-        ## END for stream in streams...
+        ## END for stream in self.xdf_streams...
 
         stream_infos: pd.DataFrame = pd.DataFrame.from_records(stream_infos)
 
         if ('stream_start_datetime' in stream_infos):
-            stream_infos = stream_infos.sort_values('stream_start_datetime', ascending=True, inplace=False)
-            earliest_stream_start_datetime: datetime = np.nanmin(stream_infos['stream_start_datetime'].to_numpy()) # Timestamp('2025-10-20 18:28:33-0400', tz='US/Eastern')
+            stream_infos = stream_infos.sort_values('stream_start_datetime', ascending=True, inplace=False, na_position='last')
+            earliest_stream_start_datetime: datetime = stream_infos['stream_start_datetime'].dropna().min() # Timestamp('2025-10-20 18:28:33-0400', tz='US/Eastern') # TODO#TODO 2026-03-29 05:41: - [ ] 'VideoRecorderMarkers' added by `continuous_video_recorder` is missing: ['stream_start_lsl_local_offset_seconds', 'stream_start_datetime', ...]
             stream_infos['stream_start_datetime_rel_to_earliest'] = (stream_infos['stream_start_datetime'] - earliest_stream_start_datetime) #.dt.total_seconds() #.to_numpy().total_seconds()
         else:
             earliest_stream_start_datetime = None
