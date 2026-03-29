@@ -29,6 +29,7 @@ mne.viz.set_browser_backend("Matplotlib")
 # from ..EegProcessing import bandpower
 from numpy.typing import NDArray
 
+import autoreject # apply_autoreject_filter
 
 set_log_level("WARNING")
 
@@ -396,6 +397,63 @@ class EEGComputations:
                                         )
 
 
+    # ==================================================================================================================================================================================================================================================================================== #
+    # Channel Quality Determination/Bad Channels                                                                                                                                                                                                                                           #
+    # ==================================================================================================================================================================================================================================================================================== #
+
+    @classmethod
+    def apply_autoreject_filter(cls, a_raw, epoch_fixed_duration=3, should_plot: bool = False):
+        """ computes the bad epochs via the autoreject package, using global/local amplitude thresholds determined dynamically
+
+        Usage:
+            from phoofflineeeganalysis.PendingNotebookCode import apply_autoreject_filter
+
+            epochs_cleaned, (epochs, reject_log), ica = apply_autoreject_filter(a_raw, epoch_fixed_duration=3)
+            epochs
+            epochs_cleaned
+
+
+        """
+        a_raw.copy().filter(l_freq=1, h_freq=None)
+        epochs = mne.make_fixed_length_epochs(a_raw, duration=epoch_fixed_duration, preload=True)
+
+        # plot the data
+        # epochs.average().detrend().plot_joint()
+
+
+        # picks = mne.pick_types(a_raw.info, meg=True, eeg=True, stim=False,
+        #                        eog=True, include=include, exclude='bads')
+        # epochs = mne.Epochs(a_raw, events, event_id, tmin, tmax,
+        #                     picks=picks, baseline=(None, 0), preload=True,
+        #                     reject=None, verbose=False, detrend=1)
+
+        ar = autoreject.AutoReject(n_interpolate=[1, 2, 3], random_state=1337, n_jobs=1, verbose=True)
+        ar.fit(epochs[:20])  # fit on a few epochs to save time
+        epochs_cleaned, reject_log = ar.transform(epochs, return_log=True)
+
+        if should_plot:
+            epochs[reject_log.bad_epochs].plot(scalings=dict(eeg=100e-6))
+            reject_log.plot('horizontal')
+
+        # epochs[reject_log.bad_epochs].plot(scalings=dict(eeg=100e-6))
+
+        # compute ICA
+        ica = mne.preprocessing.ICA(random_state=1337)
+        ica.fit(epochs[~reject_log.bad_epochs])
+        exclude = [0,  # blinks
+                2  # saccades
+                ]
+        if should_plot:
+            ica.plot_components(exclude)
+        ica.exclude = exclude
+        if should_plot:
+            ica.plot_overlay(epochs.average(), exclude=ica.exclude)
+        ica.apply(epochs, exclude=ica.exclude)
+
+        return epochs_cleaned, (epochs, reject_log), ica
+
+
+
     @classmethod
     def time_independent_bad_channels(cls, raw: mne.io.Raw, **kwargs) -> dict:
         """Detect low-quality EEG channels across the entire recording using pyprep.
@@ -536,6 +594,9 @@ class EEGComputations:
         return out
 
 
+    # ==================================================================================================================================================================================================================================================================================== #
+    # Read/Write                                                                                                                                                                                                                                                                           #
+    # ==================================================================================================================================================================================================================================================================================== #
     @classmethod
     def perform_write_to_hdf(cls, a_result, f, root_key: str='/', debug_print=True):
         """ 
