@@ -423,9 +423,9 @@ class EEGComputations:
         """ computes the bad epochs via the autoreject package, using global/local amplitude thresholds determined dynamically
 
         Usage:
-            from phoofflineeeganalysis.PendingNotebookCode import apply_autoreject_filter
+            from phopymnehelper.EEG_data import EEGComputations
 
-            epochs_cleaned, (epochs, reject_log), ica = apply_autoreject_filter(a_raw, epoch_fixed_duration=3)
+            epochs_cleaned, (epochs, reject_log), ica = EEGComputations.apply_autoreject_filter(a_raw, epoch_fixed_duration=3)
             epochs
             epochs_cleaned
 
