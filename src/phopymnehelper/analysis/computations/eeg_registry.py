@@ -1,0 +1,88 @@
+"""Registered EEG computation nodes wrapping EEGComputations (DAG + shared params)."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
+
+from phopymnehelper.EEG_data import EEGComputations
+from phopymnehelper.analysis.computations.cache import DiskComputationCache
+from phopymnehelper.analysis.computations.engine import GraphExecutor
+from phopymnehelper.analysis.computations.protocol import DEFAULT_REGISTRY, ArtifactKind, ComputationNode, ComputationRegistry, RunContext, SessionFingerprint
+
+EEG_COMPUTATION_IDS_ORDERED: Tuple[str, ...] = ("time_independent_bad_channels", "raw_data_topo", "cwt", "spectogram")
+
+_EEG_NODES_REGISTERED = False
+
+
+def _bad_ch_run(ctx: RunContext, params: Mapping[str, Any], dep_outputs: Mapping[str, Any]) -> Any:
+    return EEGComputations.time_independent_bad_channels(ctx.raw, **dict(params))
+
+
+def _topo_run(ctx: RunContext, params: Mapping[str, Any], dep_outputs: Mapping[str, Any]) -> Any:
+    return EEGComputations.raw_data_topo(ctx.raw, **dict(params))
+
+
+def _cwt_run(ctx: RunContext, params: Mapping[str, Any], dep_outputs: Mapping[str, Any]) -> Any:
+    return EEGComputations.raw_morlet_cwt(ctx.raw, **dict(params))
+
+
+def _spectogram_run(ctx: RunContext, params: Mapping[str, Any], dep_outputs: Mapping[str, Any]) -> Any:
+    return EEGComputations.raw_spectogram_working(ctx.raw, **dict(params))
+
+
+def ensure_default_eeg_registry() -> ComputationRegistry:
+    global _EEG_NODES_REGISTERED
+    if _EEG_NODES_REGISTERED:
+        return DEFAULT_REGISTRY
+    DEFAULT_REGISTRY.register(ComputationNode(id="time_independent_bad_channels", version="1", deps=(), kind=ArtifactKind.summary, run=_bad_ch_run))
+    DEFAULT_REGISTRY.register(ComputationNode(id="raw_data_topo", version="1", deps=("time_independent_bad_channels",), kind=ArtifactKind.stream, run=_topo_run))
+    DEFAULT_REGISTRY.register(ComputationNode(id="cwt", version="1", deps=("time_independent_bad_channels",), kind=ArtifactKind.stream, run=_cwt_run))
+    DEFAULT_REGISTRY.register(ComputationNode(id="spectogram", version="1", deps=("time_independent_bad_channels",), kind=ArtifactKind.stream, run=_spectogram_run))
+    _EEG_NODES_REGISTERED = True
+    return DEFAULT_REGISTRY
+
+
+def register_eeg_computation_nodes(registry: ComputationRegistry) -> None:
+    """Register the standard EEG nodes on a custom registry (for tests or isolated graphs)."""
+    registry.register(ComputationNode(id="time_independent_bad_channels", version="1", deps=(), kind=ArtifactKind.summary, run=_bad_ch_run))
+    registry.register(ComputationNode(id="raw_data_topo", version="1", deps=("time_independent_bad_channels",), kind=ArtifactKind.stream, run=_topo_run))
+    registry.register(ComputationNode(id="cwt", version="1", deps=("time_independent_bad_channels",), kind=ArtifactKind.stream, run=_cwt_run))
+    registry.register(ComputationNode(id="spectogram", version="1", deps=("time_independent_bad_channels",), kind=ArtifactKind.stream, run=_spectogram_run))
+
+
+def session_fingerprint_for_raw_or_path(raw: Any, path: Optional[Path] = None, mtime: Optional[float] = None) -> SessionFingerprint:
+    if path is not None:
+        p = Path(path)
+        mt = mtime if mtime is not None else (p.stat().st_mtime if p.exists() else None)
+        return SessionFingerprint.from_path(p, mtime=mt)
+    desc = getattr(raw, "filenames", None)
+    if desc and len(desc) > 0:
+        try:
+            return SessionFingerprint.from_path(Path(desc[0]), mtime=None)
+        except Exception:
+            pass
+    info_d = getattr(raw, "info", None)
+    if info_d is not None:
+        d = info_d.get("description", "") or "unknown_raw"
+        return SessionFingerprint(canonical_path=str(d), mtime=mtime, extra=())
+    return SessionFingerprint(canonical_path="unknown_session", mtime=mtime, extra=())
+
+
+def run_eeg_computations_graph(raw: Any, session: SessionFingerprint, global_params: Optional[Mapping[str, Any]] = None, goals: Optional[Sequence[str]] = None, registry: Optional[ComputationRegistry] = None, cache: Optional[DiskComputationCache] = None, use_cache: bool = True, parallel: bool = False, max_workers: int = 4) -> Dict[str, Any]:
+    reg = registry
+    if reg is None:
+        reg = ensure_default_eeg_registry()
+    else:
+        if not reg.has("spectogram"):
+            register_eeg_computation_nodes(reg)
+    g = tuple(goals) if goals is not None else EEG_COMPUTATION_IDS_ORDERED
+    ctx = RunContext(session=session, raw=raw)
+    ex = GraphExecutor(reg, cache)
+    return ex.run(ctx, g, global_params=global_params, use_cache=use_cache and cache is not None, parallel=parallel, max_workers=max_workers)
+
+
+def run_eeg_graph_legacy_ordered(**kwargs: Any) -> Dict[str, Any]:
+    """Run graph and return a dict with keys in the same order as EEGComputations.all_fcns_dict()."""
+    out = run_eeg_computations_graph(**kwargs)
+    return {k: out[k] for k in EEG_COMPUTATION_IDS_ORDERED if k in out}
