@@ -123,27 +123,7 @@ def _window_hits_sample_mask(t0: float, t1: float, sfreq: float, n_times: int, s
     return bool(np.any(sample_mask[i0:i1]))
 
 
-def compute_theta_delta_sleep_intrusion_series(
-    raw_eeg: mne.io.BaseRaw,
-    motion_df: Optional[pd.DataFrame] = None,
-    *,
-    total_accel_threshold: float = 0.5,
-    minimum_motion_bad_duration: float = 0.05,
-    meas_date: Any = None,
-    l_freq: float = 1.0,
-    h_freq: Optional[float] = 40.0,
-    window_sec: float = 4.0,
-    step_sec: float = 1.0,
-    delta_band: Tuple[float, float] = (1.0, 4.0),
-    theta_band: Tuple[float, float] = (4.0, 8.0),
-    use_autoreject: bool = False,
-    autoreject_epoch_sec: float = 3.0,
-    autoreject_kwargs: Optional[Mapping[str, Any]] = None,
-    bad_channel_kwargs: Optional[Mapping[str, Any]] = None,
-    channel_agg: str = "mean",
-    copy_raw: bool = True,
-    motion_description_substr: str = "BAD_motion",
-) -> Dict[str, Any]:
+def compute_theta_delta_sleep_intrusion_series(raw_eeg: mne.io.BaseRaw, motion_df: Optional[pd.DataFrame] = None, *, total_accel_threshold: float = 0.5, minimum_motion_bad_duration: float = 0.05, meas_date: Any = None, l_freq: float = 1.0, h_freq: Optional[float] = 40.0, window_sec: float = 4.0, step_sec: float = 1.0, delta_band: Tuple[float, float] = (1.0, 4.0), theta_band: Tuple[float, float] = (4.0, 8.0), use_autoreject: bool = False, autoreject_epoch_sec: float = 3.0, autoreject_kwargs: Optional[Mapping[str, Any]] = None, bad_channel_kwargs: Optional[Mapping[str, Any]] = None, channel_agg: str = "mean", copy_raw: bool = True, motion_description_substr: str = "BAD_motion") -> Dict[str, Any]:
     """Compute sliding-window theta/d delta power ratio with motion and QC exclusions.
 
     ``motion_df`` must use column ``t`` (seconds, aligned with ``raw_eeg.times``). When ``motion_df`` is
@@ -290,6 +270,7 @@ def compute_theta_delta_sleep_intrusion_series(
             continue
         times_list.append(tc)
         ratio_list.append(float(p_theta / (p_delta + eps)))
+    ## END for t0, t1, tc in edges...
 
     times_arr = np.asarray(times_list, dtype=float)
     ratio_arr = np.asarray(ratio_list, dtype=float)
