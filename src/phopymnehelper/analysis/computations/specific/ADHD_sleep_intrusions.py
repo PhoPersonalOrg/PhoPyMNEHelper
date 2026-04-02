@@ -329,6 +329,7 @@ def apply_adhd_sleep_intrusion_to_timeline(timeline, adhd_ctx):
     from pypho_timeline.rendering.datasources.specific.eeg import EEGTrackDatasource
     from pypho_timeline.utils.datetime_helpers import datetime_to_unix_timestamp, float_to_datetime
 
+    bottom_label_text: str = ''
     out = adhd_ctx["out"]
     if out is None:
         print("Run the compute cell first.")
@@ -365,7 +366,7 @@ def apply_adhd_sleep_intrusion_to_timeline(timeline, adhd_ctx):
         plot_item.setXRange(datetime_to_unix_timestamp(float_to_datetime(timeline.total_data_start_time, timeline.reference_datetime)), datetime_to_unix_timestamp(float_to_datetime(timeline.total_data_end_time, timeline.reference_datetime)), padding=0)
     else:
         plot_item.setXRange(float(timeline.total_data_start_time), float(timeline.total_data_end_time), padding=0)
-    plot_item.setLabel("bottom", "Time")
+    plot_item.setLabel("bottom", bottom_label_text)
     plot_item.setYRange(0, 1, padding=0.05)
     plot_item.hideAxis("left")
     timeline.add_track(ratio_ds, name=analysis_name, plot_item=plot_item)

@@ -253,7 +253,6 @@ class LabRecorderXDF:
     datasets_dict: Dict[DataModalityType, List[mne.io.Raw]] = field(default=None)
 
 
-
     # --------------------------------------------------------------------- #
     #                     EEG grouping / merging helpers                    #
     # --------------------------------------------------------------------- #
