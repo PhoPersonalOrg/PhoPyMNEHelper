@@ -488,21 +488,30 @@ class EEGComputations:
             return _empty_out
 
         try:
-            # Extract some info
-            sample_rate = raw.info["sfreq"]
+            import warnings as _warnings
+
+            _prep_keys = frozenset({"ransac", "channel_wise", "max_chunk_size", "random_state", "filter_kwargs", "reject_by_annotation", "matlab_strict"})
+            prep_extra = {k: v for k, v in kwargs.items() if k in _prep_keys}
+            sample_rate = float(raw.info["sfreq"])
             montage = raw.get_montage()
-            # Make a copy of the data
-            raw_copy = raw.copy()
+            n_eeg = len(mne.pick_types(raw.info, meg=False, eeg=True, exclude=[]))
+            line_upper = int(np.floor(sample_rate / 2.0))
+            prep_params = {"ref_chs": "eeg", "reref_chs": "eeg", "line_freqs": np.arange(60, line_upper, 60)}
+            use_ransac = bool(prep_extra["ransac"]) if "ransac" in prep_extra else (n_eeg >= 16)
 
-            # Fit prep
-            prep_params = {
-                "ref_chs": "eeg",
-                "reref_chs": "eeg",
-                "line_freqs": np.arange(60, sample_rate / 2, 60),
-            }
+            def _fit_prep(*, with_ransac: bool):
+                rc = raw.copy()
+                p = PrepPipeline(rc, prep_params, montage, **{**prep_extra, "ransac": with_ransac})
+                p.fit()
+                return p
 
-            prep = PrepPipeline(raw_copy, prep_params, montage)
-            prep.fit()
+            try:
+                prep = _fit_prep(with_ransac=use_ransac)
+            except IndexError as _idx_err:
+                if not use_ransac:
+                    raise
+                _warnings.warn(f"PrepPipeline RANSAC raised {_idx_err!r}; retrying with ransac=False.", RuntimeWarning, stacklevel=2)
+                prep = _fit_prep(with_ransac=False)
 
             interpolated_channels = list(prep.interpolated_channels)
             noisy_channels_original = dict(prep.noisy_channels_original)

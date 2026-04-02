@@ -969,6 +969,20 @@ class LabRecorderXDF:
         return _obj
 
 
+    # @classmethod
+    # def up_convert_and_process_raw(cls, eeg_raw):
+    #     """ slow but inline 
+
+    #     eeg_raw = LabRecorderXDF.up_convert_and_process_raw(eeg_raw=eeg_raw)
+
+    #     """
+    #     from phopymnehelper.MNE_helpers import up_convert_raw_objects, up_convert_raw_obj
+    #     from phopymnehelper.EEG_data import EEGData
+    #     eeg_raw = up_convert_raw_obj(eeg_raw)
+    #     EEGData.set_montage(datasets_EEG=[eeg_raw])
+    #     return eeg_raw
+
+
     @classmethod
     def load_and_process_all(cls, lab_recorder_output_path: Path, 
                                   labRecorder_PostProcessed_path: Optional[Path] = Path("E:/Dropbox (Personal)/Databases/AnalysisData/MNE_preprocessed/LabRecorder_PostProcessed").resolve(),
