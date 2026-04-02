@@ -1,7 +1,8 @@
 """Pyprep bad-channel QC plus optional autoreject bad-epoch timing (no motion pipeline).
 
-Results are suitable for caching, DAG nodes (:class:`BadEpochsQCComputation`), and timeline
-overlays via :func:`apply_bad_epochs_overlays_to_timeline`.
+Results are suitable for caching, DAG nodes (:class:`BadEpochsQCComputation`), timeline
+overlays via :func:`apply_bad_epochs_overlays_to_timeline`, and an interval strip track
+via :func:`ensure_bad_epochs_interval_track` (same ``time_offset`` as the overlays).
 """
 
 from __future__ import annotations
@@ -16,6 +17,9 @@ import numpy as np
 from phopymnehelper.EEG_data import EEGComputations
 from phopymnehelper.analysis.computations.protocol import ArtifactKind, RunContext
 from phopymnehelper.analysis.computations.specific.base import SpecificComputationBase
+
+
+BAD_EPOCH_INTERVALS_TRACK_DEFAULT_NAME: str = "bad epoch intervals"
 
 
 BAD_EPOCHS_QC_PARAM_KEYS: FrozenSet[str] = frozenset(
@@ -146,7 +150,73 @@ class BadEpochsQCComputation(SpecificComputationBase):
         return compute_bad_epochs_qc(ctx.raw, **kw)
 
 
-def apply_bad_epochs_overlays_to_timeline(timeline, result: Mapping[str, Any], *, time_offset: float = 0.0, z_value: float = 10.0) -> None:
+def ensure_bad_epochs_interval_track(timeline, result: Mapping[str, Any], *, time_offset: float = 0.0, track_name: str = BAD_EPOCH_INTERVALS_TRACK_DEFAULT_NAME) -> None:
+    """Add or refresh a :class:`~pypho_timeline.rendering.datasources.track_datasource.IntervalProvidingTrackDatasource` strip for bad epochs.
+
+    Uses the same mapping as :func:`apply_bad_epochs_overlays_to_timeline`: each interval endpoint is
+    ``time_offset`` plus raw-relative seconds from ``result[\"bad_epoch_intervals_rel\"]``. Pass the same
+    ``time_offset`` as for overlays so the strip aligns with EEG/XDF timeline axes (often Unix seconds).
+    """
+    from datetime import datetime
+
+    import pandas as pd
+
+    from pypho_timeline.core.synchronized_plot_mode import SynchronizedPlotMode
+    from pypho_timeline.docking.dock_display_configs import CustomCyclicColorsDockDisplayConfig, NamedColorScheme
+    from pypho_timeline.rendering.datasources.stream_to_datasources import default_dock_named_color_scheme_key
+    from pypho_timeline.rendering.datasources.track_datasource import IntervalProvidingTrackDatasource
+    from pypho_timeline.utils.datetime_helpers import datetime_to_unix_timestamp, float_to_datetime
+
+    off = float(time_offset)
+    rows: List[Dict[str, float]] = []
+    for a, b in list(result.get("bad_epoch_intervals_rel") or []):
+        x0, x1 = off + float(a), off + float(b)
+        if x1 <= x0:
+            continue
+        rows.append(dict(t_start=x0, t_duration=x1 - x0, t_end=x1))
+    intervals_df = pd.DataFrame(rows) if rows else pd.DataFrame({"t_start": pd.Series(dtype=float), "t_duration": pd.Series(dtype=float), "t_end": pd.Series(dtype=float)})
+    new_ds = IntervalProvidingTrackDatasource(intervals_df=intervals_df, detailed_df=None, custom_datasource_name=track_name, max_points_per_second=1.0, enable_downsampling=False)
+
+    if track_name not in timeline.track_renderers:
+        _scheme_key = default_dock_named_color_scheme_key(track_name)
+        display_config = CustomCyclicColorsDockDisplayConfig(named_color_scheme=NamedColorScheme[_scheme_key], showCloseButton=True, showCollapseButton=True, showGroupButton=False, corner_radius="3px")
+        track_widget, _root_g, a_plot_item, a_dock = timeline.add_new_embedded_pyqtgraph_render_plot_widget(name=track_name, dockSize=(500, 80), dockAddLocationOpts=["bottom"], display_config=display_config, sync_mode=SynchronizedPlotMode.TO_GLOBAL_DATA)
+        bottom_label_text = ""
+        if isinstance(timeline.total_data_start_time, (datetime, pd.Timestamp)):
+            unix_start = datetime_to_unix_timestamp(timeline.total_data_start_time)
+            unix_end = datetime_to_unix_timestamp(timeline.total_data_end_time)
+            a_plot_item.setXRange(unix_start, unix_end, padding=0)
+            a_plot_item.setLabel("bottom", bottom_label_text)
+        elif timeline.reference_datetime is not None:
+            dt_start = float_to_datetime(timeline.total_data_start_time, timeline.reference_datetime)
+            dt_end = float_to_datetime(timeline.total_data_end_time, timeline.reference_datetime)
+            unix_start = datetime_to_unix_timestamp(dt_start)
+            unix_end = datetime_to_unix_timestamp(dt_end)
+            a_plot_item.setXRange(unix_start, unix_end, padding=0)
+            a_plot_item.setLabel("bottom", bottom_label_text)
+        else:
+            a_plot_item.setXRange(timeline.total_data_start_time, timeline.total_data_end_time, padding=0)
+            a_plot_item.setLabel("bottom", bottom_label_text, units="s")
+        a_plot_item.setYRange(0, 1, padding=0)
+        a_plot_item.setLabel("left", track_name)
+        a_plot_item.hideAxis("left")
+        timeline.add_track(new_ds, name=track_name, plot_item=a_plot_item)
+        track_widget.optionsPanel = track_widget.getOptionsPanel()
+        if hasattr(a_dock, "updateWidgetsHaveOptionsPanel"):
+            a_dock.updateWidgetsHaveOptionsPanel()
+        if hasattr(a_dock, "updateTitleBar"):
+            a_dock.updateTitleBar()
+        getattr(timeline, "_rebuild_timeline_overview_strip", lambda: None)()
+        return
+
+    extant_ds = timeline.track_datasources.get(track_name)
+    tr = timeline.track_renderers.get(track_name)
+    if extant_ds is not None and tr is not None and isinstance(extant_ds, IntervalProvidingTrackDatasource):
+        extant_ds.intervals_df = new_ds.intervals_df.copy()
+        tr.refresh_overview()
+
+
+def apply_bad_epochs_overlays_to_timeline(timeline, result: Mapping[str, Any], *, time_offset: float = 0.0, z_value: float = 10.0, add_interval_track: bool = False) -> None:
     import pyqtgraph as pg
 
     from pypho_timeline.rendering.datasources.specific.eeg import EEGSpectrogramTrackDatasource, EEGTrackDatasource
@@ -187,12 +257,16 @@ def apply_bad_epochs_overlays_to_timeline(timeline, result: Mapping[str, Any], *
         if items:
             new_regions[track_name] = items
     timeline._bad_epochs_overlay_regions = new_regions
+    if add_interval_track:
+        ensure_bad_epochs_interval_track(timeline, result, time_offset=time_offset)
 
 
 __all__ = [
+    "BAD_EPOCH_INTERVALS_TRACK_DEFAULT_NAME",
     "BAD_EPOCHS_QC_PARAM_KEYS",
     "BadEpochsQCComputation",
     "apply_bad_epochs_overlays_to_timeline",
+    "ensure_bad_epochs_interval_track",
     "autoreject_bad_sample_mask",
     "bad_epochs_qc_params_fingerprint",
     "compute_bad_epochs_qc",
