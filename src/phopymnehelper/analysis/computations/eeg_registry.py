@@ -9,6 +9,7 @@ from phopymnehelper.EEG_data import EEGComputations
 from phopymnehelper.analysis.computations.cache import DiskComputationCache
 from phopymnehelper.analysis.computations.engine import GraphExecutor
 from phopymnehelper.analysis.computations.protocol import DEFAULT_REGISTRY, ArtifactKind, ComputationNode, ComputationRegistry, RunContext, SessionFingerprint
+from phopymnehelper.analysis.computations.specific.EEG_Spectograms import EEGSpectrogramComputation
 
 EEG_COMPUTATION_IDS_ORDERED: Tuple[str, ...] = ("time_independent_bad_channels", "raw_data_topo", "cwt", "spectogram")
 
@@ -27,10 +28,6 @@ def _cwt_run(ctx: RunContext, params: Mapping[str, Any], dep_outputs: Mapping[st
     return EEGComputations.raw_morlet_cwt(ctx.raw, **dict(params))
 
 
-def _spectogram_run(ctx: RunContext, params: Mapping[str, Any], dep_outputs: Mapping[str, Any]) -> Any:
-    return EEGComputations.raw_spectogram_working(ctx.raw, **dict(params))
-
-
 def ensure_default_eeg_registry() -> ComputationRegistry:
     global _EEG_NODES_REGISTERED
     if _EEG_NODES_REGISTERED:
@@ -38,7 +35,7 @@ def ensure_default_eeg_registry() -> ComputationRegistry:
     DEFAULT_REGISTRY.register(ComputationNode(id="time_independent_bad_channels", version="1", deps=(), kind=ArtifactKind.summary, run=_bad_ch_run))
     DEFAULT_REGISTRY.register(ComputationNode(id="raw_data_topo", version="1", deps=("time_independent_bad_channels",), kind=ArtifactKind.stream, run=_topo_run))
     DEFAULT_REGISTRY.register(ComputationNode(id="cwt", version="1", deps=("time_independent_bad_channels",), kind=ArtifactKind.stream, run=_cwt_run))
-    DEFAULT_REGISTRY.register(ComputationNode(id="spectogram", version="1", deps=("time_independent_bad_channels",), kind=ArtifactKind.stream, run=_spectogram_run))
+    DEFAULT_REGISTRY.register(EEGSpectrogramComputation().to_computation_node())
     _EEG_NODES_REGISTERED = True
     return DEFAULT_REGISTRY
 
@@ -48,7 +45,7 @@ def register_eeg_computation_nodes(registry: ComputationRegistry) -> None:
     registry.register(ComputationNode(id="time_independent_bad_channels", version="1", deps=(), kind=ArtifactKind.summary, run=_bad_ch_run))
     registry.register(ComputationNode(id="raw_data_topo", version="1", deps=("time_independent_bad_channels",), kind=ArtifactKind.stream, run=_topo_run))
     registry.register(ComputationNode(id="cwt", version="1", deps=("time_independent_bad_channels",), kind=ArtifactKind.stream, run=_cwt_run))
-    registry.register(ComputationNode(id="spectogram", version="1", deps=("time_independent_bad_channels",), kind=ArtifactKind.stream, run=_spectogram_run))
+    registry.register(EEGSpectrogramComputation().to_computation_node())
 
 
 def session_fingerprint_for_raw_or_path(raw: Any, path: Optional[Path] = None, mtime: Optional[float] = None) -> SessionFingerprint:
