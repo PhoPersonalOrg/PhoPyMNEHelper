@@ -127,6 +127,11 @@ def compute_bad_epochs_qc(raw_eeg: mne.io.BaseRaw, *, l_freq: float = 1.0, h_fre
 
 
 class BadEpochsQCComputation(SpecificComputationBase):
+    """ 
+    from phopymnehelper.analysis.computations.specific.bad_epochs import BadEpochsQCComputation
+
+    """
+
     computation_id: ClassVar[str] = "bad_epochs"
     version: ClassVar[str] = "1"
     deps: ClassVar[Tuple[str, ...]] = ()

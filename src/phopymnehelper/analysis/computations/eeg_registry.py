@@ -9,11 +9,17 @@ from phopymnehelper.EEG_data import EEGComputations
 from phopymnehelper.analysis.computations.cache import DiskComputationCache
 from phopymnehelper.analysis.computations.engine import GraphExecutor
 from phopymnehelper.analysis.computations.protocol import DEFAULT_REGISTRY, ArtifactKind, ComputationNode, ComputationRegistry, RunContext, SessionFingerprint
+from phopymnehelper.analysis.computations.specific.bad_epochs import BadEpochsQCComputation
 from phopymnehelper.analysis.computations.specific.EEG_Spectograms import EEGSpectrogramComputation
 
-EEG_COMPUTATION_IDS_ORDERED: Tuple[str, ...] = ("time_independent_bad_channels", "raw_data_topo", "cwt", "spectogram")
+EEG_COMPUTATION_IDS_ORDERED: Tuple[str, ...] = ("time_independent_bad_channels", "bad_epochs", "raw_data_topo", "cwt", "spectogram")
 
 _EEG_NODES_REGISTERED = False
+
+
+def _register_node_if_absent(registry: ComputationRegistry, node: ComputationNode) -> None:
+    if not registry.has(node.id):
+        registry.register(node)
 
 
 def _bad_ch_run(ctx: RunContext, params: Mapping[str, Any], dep_outputs: Mapping[str, Any]) -> Any:
@@ -36,16 +42,18 @@ def ensure_default_eeg_registry() -> ComputationRegistry:
     DEFAULT_REGISTRY.register(ComputationNode(id="raw_data_topo", version="1", deps=("time_independent_bad_channels",), kind=ArtifactKind.stream, run=_topo_run))
     DEFAULT_REGISTRY.register(ComputationNode(id="cwt", version="1", deps=("time_independent_bad_channels",), kind=ArtifactKind.stream, run=_cwt_run))
     DEFAULT_REGISTRY.register(EEGSpectrogramComputation().to_computation_node())
+    DEFAULT_REGISTRY.register(BadEpochsQCComputation().to_computation_node())
     _EEG_NODES_REGISTERED = True
     return DEFAULT_REGISTRY
 
 
 def register_eeg_computation_nodes(registry: ComputationRegistry) -> None:
     """Register the standard EEG nodes on a custom registry (for tests or isolated graphs)."""
-    registry.register(ComputationNode(id="time_independent_bad_channels", version="1", deps=(), kind=ArtifactKind.summary, run=_bad_ch_run))
-    registry.register(ComputationNode(id="raw_data_topo", version="1", deps=("time_independent_bad_channels",), kind=ArtifactKind.stream, run=_topo_run))
-    registry.register(ComputationNode(id="cwt", version="1", deps=("time_independent_bad_channels",), kind=ArtifactKind.stream, run=_cwt_run))
-    registry.register(EEGSpectrogramComputation().to_computation_node())
+    _register_node_if_absent(registry, ComputationNode(id="time_independent_bad_channels", version="1", deps=(), kind=ArtifactKind.summary, run=_bad_ch_run))
+    _register_node_if_absent(registry, ComputationNode(id="raw_data_topo", version="1", deps=("time_independent_bad_channels",), kind=ArtifactKind.stream, run=_topo_run))
+    _register_node_if_absent(registry, ComputationNode(id="cwt", version="1", deps=("time_independent_bad_channels",), kind=ArtifactKind.stream, run=_cwt_run))
+    _register_node_if_absent(registry, EEGSpectrogramComputation().to_computation_node())
+    _register_node_if_absent(registry, BadEpochsQCComputation().to_computation_node())
 
 
 def session_fingerprint_for_raw_or_path(raw: Any, path: Optional[Path] = None, mtime: Optional[float] = None) -> SessionFingerprint:
@@ -71,7 +79,7 @@ def run_eeg_computations_graph(raw: Any, session: SessionFingerprint, global_par
     if reg is None:
         reg = ensure_default_eeg_registry()
     else:
-        if not reg.has("spectogram"):
+        if not reg.has("spectogram") or not reg.has("bad_epochs"):
             register_eeg_computation_nodes(reg)
     g = tuple(goals) if goals is not None else EEG_COMPUTATION_IDS_ORDERED
     ctx = RunContext(session=session, raw=raw)
