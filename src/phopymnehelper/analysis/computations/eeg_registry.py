@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Literal, Mapping, Optional, Sequence, Tuple, TypeAlias
 
 from phopymnehelper.EEG_data import EEGComputations
 from phopymnehelper.analysis.computations.cache import DiskComputationCache
@@ -12,7 +12,10 @@ from phopymnehelper.analysis.computations.protocol import DEFAULT_REGISTRY, Arti
 from phopymnehelper.analysis.computations.specific.bad_epochs import BadEpochsQCComputation
 from phopymnehelper.analysis.computations.specific.EEG_Spectograms import EEGSpectrogramComputation
 
-EEG_COMPUTATION_IDS_ORDERED: Tuple[str, ...] = ("time_independent_bad_channels", "bad_epochs", "raw_data_topo", "cwt", "spectogram")
+EEGComputationId: TypeAlias = Literal["time_independent_bad_channels", "bad_epochs", "raw_data_topo", "cwt", "spectogram"]
+
+EEG_COMPUTATION_IDS_ORDERED: Tuple[EEGComputationId, ...] = ("time_independent_bad_channels", "bad_epochs", "raw_data_topo", "cwt", "spectogram")
+
 
 _EEG_NODES_REGISTERED = False
 
@@ -74,7 +77,7 @@ def session_fingerprint_for_raw_or_path(raw: Any, path: Optional[Path] = None, m
     return SessionFingerprint(canonical_path="unknown_session", mtime=mtime, extra=())
 
 
-def run_eeg_computations_graph(raw: Any, session: SessionFingerprint, global_params: Optional[Mapping[str, Any]] = None, goals: Optional[Sequence[str]] = None, registry: Optional[ComputationRegistry] = None, cache: Optional[DiskComputationCache] = None, use_cache: bool = True, parallel: bool = False, max_workers: int = 4) -> Dict[str, Any]:
+def run_eeg_computations_graph(raw: Any, session: SessionFingerprint, global_params: Optional[Mapping[str, Any]] = None, goals: Optional[Sequence[EEGComputationId]] = None, registry: Optional[ComputationRegistry] = None, cache: Optional[DiskComputationCache] = None, use_cache: bool = True, parallel: bool = False, max_workers: int = 4) -> Dict[str, Any]:
     reg = registry
     if reg is None:
         reg = ensure_default_eeg_registry()

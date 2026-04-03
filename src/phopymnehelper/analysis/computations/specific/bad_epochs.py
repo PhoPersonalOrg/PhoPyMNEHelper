@@ -13,10 +13,13 @@ from typing import Any, Callable, ClassVar, Dict, FrozenSet, List, Mapping, Opti
 
 import mne
 import numpy as np
+import pandas as pd
 
 from phopymnehelper.EEG_data import EEGComputations
 from phopymnehelper.analysis.computations.protocol import ArtifactKind, RunContext
 from phopymnehelper.analysis.computations.specific.base import SpecificComputationBase
+from phopymnehelper.helpers.dataframe_accessor_helpers import MaskedValidDataFrameAccessor
+from phopymnehelper.motion_data import MotionData, MotionDataFrame, BadMotionDataFrame
 
 
 BAD_EPOCH_INTERVALS_TRACK_DEFAULT_NAME: str = "bad epoch intervals"
@@ -109,7 +112,9 @@ def _bad_sample_mask_to_intervals_rel(raw: mne.io.BaseRaw, mask: np.ndarray) -> 
     return out
 
 
-def compute_bad_epochs_qc(raw_eeg: mne.io.BaseRaw, *, l_freq: float = 1.0, h_freq: Optional[float] = 40.0, use_autoreject: bool = True, autoreject_epoch_sec: float = 3.0, autoreject_kwargs: Optional[Mapping[str, Any]] = None, bad_channel_kwargs: Optional[Mapping[str, Any]] = None, copy_raw: bool = True) -> Dict[str, Any]:
+def compute_bad_epochs_qc(raw_eeg: mne.io.BaseRaw, *, l_freq: float = 1.0, h_freq: Optional[float] = 40.0, use_autoreject: bool = True, autoreject_epoch_sec: float = 3.0, autoreject_kwargs: Optional[Mapping[str, Any]] = None, bad_channel_kwargs: Optional[Mapping[str, Any]] = None, copy_raw: bool = True,
+                            t0: Optional[float]=None,
+                        ) -> Dict[str, Any]:
     raw = raw_eeg.copy() if copy_raw else raw_eeg
     raw.load_data()
     nyq = 0.5 * float(raw.info["sfreq"])
@@ -125,6 +130,35 @@ def compute_bad_epochs_qc(raw_eeg: mne.io.BaseRaw, *, l_freq: float = 1.0, h_fre
     bad_epoch_intervals_rel: List[Tuple[float, float]] = [] if ar_mask is None else _bad_sample_mask_to_intervals_rel(raw, ar_mask)
     params = dict(l_freq=l_freq, h_freq=eff_h_freq, h_freq_requested=h_freq, use_autoreject=use_autoreject, autoreject_epoch_sec=autoreject_epoch_sec)
     out: Dict[str, Any] = dict(bad_channel_result=bad_channel_result, bad_epoch_intervals_rel=bad_epoch_intervals_rel, params=params)
+    if bad_epoch_intervals_rel is not None:
+        
+        # # eeg_df: pd.DataFrame = eeg_ds.detailed_df.sort_values("t").reset_index(drop=True)
+        # # _t = raw.to_data_frame().sort_values("t").reset_index(drop=True)["t"]
+        # _t: float = raw.first_time
+        # # # first = int(raw.first_samp)
+        # # _t = raw.first_time
+        # print(f"type(_t): {type(_t)}, t: {_t}")
+        # # if pd.api.types.is_datetime64_any_dtype(_t):
+        # #     t0 = float(pd.to_datetime(_t, utc=True, errors="coerce").astype(np.int64).iloc[0] / 1e9)
+        # # else:
+        # #     t0 = float(pd.to_numeric(_t, errors="coerce").iloc[0])
+        # t0 = float(_t)
+        # print(f'\tt0: {t0}')
+        # ## OUTPUTS: t0
+        bad_epoch_intervals_df: pd.DataFrame = pd.DataFrame(bad_epoch_intervals_rel, columns=['t_start_rel', 't_end_rel'])
+        t_col_names: str = ['t_start', 't_end']
+        t_rel_col_names = [f'{a_t_col}_rel' for a_t_col in t_col_names]
+
+        if t0 is not None:
+            for a_t_col, a_t_rel_col in zip(t_col_names, t_rel_col_names):
+                bad_epoch_intervals_df[a_t_col] = bad_epoch_intervals_df[a_t_rel_col] + t0
+
+        ## add duration and other optional columns
+        bad_epoch_intervals_df['duration'] = bad_epoch_intervals_df['t_end_rel'] - bad_epoch_intervals_df['t_start_rel']
+        bad_epoch_intervals_df['label'] = bad_epoch_intervals_df.index.to_numpy().astype(int)
+
+        out['bad_epoch_intervals_df'] = bad_epoch_intervals_df
+
     if ar_mask is not None:
         out["autoreject_sample_mask"] = ar_mask
     return out
@@ -147,7 +181,11 @@ class BadEpochsQCComputation(SpecificComputationBase):
         if ctx.raw is None:
             raise ValueError("BadEpochsQCComputation requires ctx.raw")
         kw = filter_bad_epochs_qc_params(params)
-        return compute_bad_epochs_qc(ctx.raw, **kw)
+        t0 = kw.get('t0', None) 
+        # if t0 is None:
+        #     t0 = ctx.earliest_unix_timestamp
+
+        return compute_bad_epochs_qc(ctx.raw, t0=t0, **kw)
 
 
 def ensure_bad_epochs_interval_track(timeline, result: Mapping[str, Any], *, time_offset: float = 0.0, track_name: str = BAD_EPOCH_INTERVALS_TRACK_DEFAULT_NAME) -> None:
@@ -167,14 +205,21 @@ def ensure_bad_epochs_interval_track(timeline, result: Mapping[str, Any], *, tim
     from pypho_timeline.rendering.datasources.track_datasource import IntervalProvidingTrackDatasource
     from pypho_timeline.utils.datetime_helpers import datetime_to_unix_timestamp, float_to_datetime
 
-    off = float(time_offset)
-    rows: List[Dict[str, float]] = []
-    for a, b in list(result.get("bad_epoch_intervals_rel") or []):
-        x0, x1 = off + float(a), off + float(b)
-        if x1 <= x0:
-            continue
-        rows.append(dict(t_start=x0, t_duration=x1 - x0, t_end=x1))
-    intervals_df = pd.DataFrame(rows) if rows else pd.DataFrame({"t_start": pd.Series(dtype=float), "t_duration": pd.Series(dtype=float), "t_end": pd.Series(dtype=float)})
+    if isinstance(result, pd.DataFrame):
+        intervals_df = result.copy()
+    elif isinstance(result, dict):
+        off = float(time_offset)
+        rows: List[Dict[str, float]] = []
+        for a, b in list(result.get("bad_epoch_intervals_rel") or []):
+            x0, x1 = off + float(a), off + float(b)
+            if x1 <= x0:
+                continue
+            rows.append(dict(t_start=x0, t_duration=x1 - x0, t_end=x1))
+        intervals_df = pd.DataFrame(rows) if rows else pd.DataFrame({"t_start": pd.Series(dtype=float), "t_duration": pd.Series(dtype=float), "t_end": pd.Series(dtype=float)})
+    else:
+        raise NotImplementedError(f'not implemented type: type(result): {type(result)},\n\tresult: {result}')
+
+
     new_ds = IntervalProvidingTrackDatasource(intervals_df=intervals_df, detailed_df=None, custom_datasource_name=track_name, max_points_per_second=1.0, enable_downsampling=False)
 
     if track_name not in timeline.track_renderers:
