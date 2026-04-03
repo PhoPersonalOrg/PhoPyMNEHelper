@@ -234,8 +234,8 @@ def ensure_bad_epochs_interval_track(timeline, result: Mapping[str, Any], *, tim
 
     if track_name not in timeline.track_renderers:
         _scheme_key = default_dock_named_color_scheme_key(track_name)
-        display_config = CustomCyclicColorsDockDisplayConfig(named_color_scheme=NamedColorScheme[_scheme_key], showCloseButton=True, showCollapseButton=True, showGroupButton=False, corner_radius="3px")
-        track_widget, _root_g, a_plot_item, a_dock = timeline.add_new_embedded_pyqtgraph_render_plot_widget(name=track_name, dockSize=(500, 80), dockAddLocationOpts=["bottom"], display_config=display_config, sync_mode=SynchronizedPlotMode.TO_GLOBAL_DATA)
+        display_config = CustomCyclicColorsDockDisplayConfig(named_color_scheme=NamedColorScheme[_scheme_key], showCloseButton=True, showCollapseButton=True, showGroupButton=False, corner_radius="0px")
+        track_widget, _root_g, a_plot_item, a_dock = timeline.add_new_embedded_pyqtgraph_render_plot_widget(name=track_name, dockSize=(500, 20), dockAddLocationOpts=["bottom"], display_config=display_config, sync_mode=SynchronizedPlotMode.TO_GLOBAL_DATA)
         bottom_label_text = ""
         if isinstance(timeline.total_data_start_time, (datetime, pd.Timestamp)):
             unix_start = datetime_to_unix_timestamp(timeline.total_data_start_time)
