@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Literal, Mapping, Optional, Sequence, Tuple, TypeAlias
 
+import phopymnehelper.type_aliases as types
 from phopymnehelper.EEG_data import EEGComputations
 from phopymnehelper.analysis.computations.cache import DiskComputationCache
 from phopymnehelper.analysis.computations.engine import GraphExecutor
@@ -12,9 +13,10 @@ from phopymnehelper.analysis.computations.protocol import DEFAULT_REGISTRY, Arti
 from phopymnehelper.analysis.computations.specific.bad_epochs import BadEpochsQCComputation
 from phopymnehelper.analysis.computations.specific.EEG_Spectograms import EEGSpectrogramComputation
 
-EEGComputationId: TypeAlias = Literal["time_independent_bad_channels", "bad_epochs", "raw_data_topo", "cwt", "spectogram"]
+# xdf_file_name: TypeAlias = str # a name of the xdf file corresponding to a given session
+# EEGComputationId: TypeAlias = Literal["time_independent_bad_channels", "bad_epochs", "raw_data_topo", "cwt", "spectogram"]
 
-EEG_COMPUTATION_IDS_ORDERED: Tuple[EEGComputationId, ...] = ("time_independent_bad_channels", "bad_epochs", "raw_data_topo", "cwt", "spectogram")
+EEG_COMPUTATION_IDS_ORDERED: Tuple[types.EEGComputationId, ...] = ("time_independent_bad_channels", "bad_epochs", "raw_data_topo", "cwt", "spectogram")
 
 
 _EEG_NODES_REGISTERED = False

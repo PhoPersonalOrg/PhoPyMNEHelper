@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import warnings
 from typing import Any, Callable, ClassVar, Dict, FrozenSet, List, Mapping, Optional, Tuple
+import phopymnehelper.type_aliases as types
 
 import mne
 import numpy as np
@@ -181,7 +182,12 @@ class BadEpochsQCComputation(SpecificComputationBase):
                     bad_epoch_intervals_df[a_t_col] = bad_epoch_intervals_df[a_t_rel_col] + t0
 
             ## add duration and other optional columns
-            bad_epoch_intervals_df['duration'] = bad_epoch_intervals_df['end_t'] - bad_epoch_intervals_df['start_t']
+            if ('end_t' in bad_epoch_intervals_df) and ('start_t' in bad_epoch_intervals_df):
+                bad_epoch_intervals_df['duration'] = bad_epoch_intervals_df['end_t'] - bad_epoch_intervals_df['start_t']
+            else:
+                assert (('end_t_rel' in bad_epoch_intervals_df) and ('start_t_rel' in bad_epoch_intervals_df)), f"bad_epoch_intervals_df: {list(bad_epoch_intervals_df.columns)}"
+                bad_epoch_intervals_df['duration'] = bad_epoch_intervals_df['end_t_rel'] - bad_epoch_intervals_df['start_t_rel']
+
             bad_epoch_intervals_df['label'] = bad_epoch_intervals_df.index.to_numpy().astype(int)
 
             out['bad_epoch_intervals_df'] = bad_epoch_intervals_df
