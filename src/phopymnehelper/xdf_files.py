@@ -253,7 +253,6 @@ class LabRecorderXDF:
     datasets_dict: Dict[DataModalityType, List[mne.io.Raw]] = field(default=None)
 
 
-
     # --------------------------------------------------------------------- #
     #                     EEG grouping / merging helpers                    #
     # --------------------------------------------------------------------- #
@@ -395,8 +394,59 @@ class LabRecorderXDF:
 
     @classmethod
     def init_basic_from_lab_recorder_xdf_file(cls, a_xdf_file: Path, skipped_stream_names: List[str]=None, debug_print=False, **kwargs) -> "LabRecorderXDF":
+        """
+        note: if debug_print == True, it enables verbose mode which produces tons of logs like:
+
+        ....
+        2026-04-01 06:14:14,869 - pyxdf.pyxdf - DEBUG -  Read tag: 4 at 95846292 bytes, length=22, StreamId=3
+        2026-04-01 06:14:14,870 - pyxdf.pyxdf - DEBUG -  Read tag: 4 at 95846316 bytes, length=22, StreamId=2
+        2026-04-01 06:14:14,871 - pyxdf.pyxdf - DEBUG -  Read tag: 4 at 95846340 bytes, length=22, StreamId=6
+        2026-04-01 06:14:14,872 - pyxdf.pyxdf - DEBUG -  Read tag: 4 at 95846364 bytes, length=22, StreamId=4
+        2026-04-01 06:14:14,873 - pyxdf.pyxdf - DEBUG -  Read tag: 4 at 95846388 bytes, length=22, StreamId=5
+        2026-04-01 06:14:14,874 - pyxdf.pyxdf - DEBUG -  Read tag: 4 at 95846412 bytes, length=22, StreamId=1
+        2026-04-01 06:14:14,875 - pyxdf.pyxdf - DEBUG -  Read tag: 3 at 95846439 bytes, length=4171, StreamId=4
+        2026-04-01 06:14:14,876 - pyxdf.pyxdf - DEBUG -   reading [14,64]
+        2026-04-01 06:14:14,877 - pyxdf.pyxdf - DEBUG -  Read tag: 3 at 95850615 bytes, length=4171, StreamId=2
+        2026-04-01 06:14:14,879 - pyxdf.pyxdf - DEBUG -   reading [14,64]
+        2026-04-01 06:14:14,879 - pyxdf.pyxdf - DEBUG -  Read tag: 3 at 95854791 bytes, length=539, StreamId=3
+        2026-04-01 06:14:14,880 - pyxdf.pyxdf - DEBUG -   reading [6,16]
+        2026-04-01 06:14:15,136 - pyxdf.pyxdf - DEBUG -  Read tag: 3 at 95855335 bytes, length=4236, StreamId=4
+        2026-04-01 06:14:15,138 - pyxdf.pyxdf - DEBUG -   reading [14,65]
+        2026-04-01 06:14:15,139 - pyxdf.pyxdf - DEBUG -  Read tag: 3 at 95859576 bytes, length=4236, StreamId=2
+        2026-04-01 06:14:15,147 - pyxdf.pyxdf - DEBUG -   reading [14,65]
+        2026-04-01 06:14:15,148 - pyxdf.pyxdf - DEBUG -  Read tag: 3 at 95863817 bytes, length=539, StreamId=3
+        2026-04-01 06:14:15,149 - pyxdf.pyxdf - DEBUG -   reading [6,16]
+        2026-04-01 06:14:15,151 - pyxdf.pyxdf - DEBUG -  Read tag: 3 at 95864361 bytes, length=4106, StreamId=2
+        2026-04-01 06:14:15,152 - pyxdf.pyxdf - DEBUG -   reading [14,63]
+        2026-04-01 06:14:15,153 - pyxdf.pyxdf - DEBUG -  Read tag: 3 at 95868472 bytes, length=4106, StreamId=4
+        2026-04-01 06:14:15,154 - pyxdf.pyxdf - DEBUG -   reading [14,63]
+        2026-04-01 06:14:15,155 - pyxdf.pyxdf - DEBUG -  Read tag: 3 at 95872583 bytes, length=539, StreamId=3
+        2026-04-01 06:14:15,155 - pyxdf.pyxdf - DEBUG -   reading [6,16]
+        2026-04-01 06:14:15,156 - pyxdf.pyxdf - DEBUG -  Read tag: 3 at 95873127 bytes, length=4301, StreamId=4
+        2026-04-01 06:14:15,158 - pyxdf.pyxdf - DEBUG -   reading [14,66]
+        2026-04-01 06:14:15,159 - pyxdf.pyxdf - DEBUG -  Read tag: 3 at 95877433 bytes, length=4301, StreamId=2
+        2026-04-01 06:14:15,160 - pyxdf.pyxdf - DEBUG -   reading [14,66]
+        2026-04-01 06:14:15,160 - pyxdf.pyxdf - DEBUG -  Read tag: 3 at 95881739 bytes, length=539, StreamId=3
+        2026-04-01 06:14:15,161 - pyxdf.pyxdf - DEBUG -   reading [6,16]
+        2026-04-01 06:14:15,162 - pyxdf.pyxdf - DEBUG -  Read tag: 4 at 95882280 bytes, length=22, StreamId=3
+        2026-04-01 06:14:15,163 - pyxdf.pyxdf - DEBUG -  Read tag: 4 at 95882304 bytes, length=22, StreamId=6
+        2026-04-01 06:14:15,164 - pyxdf.pyxdf - DEBUG -  Read tag: 4 at 95882328 bytes, length=22, StreamId=4
+        2026-04-01 06:14:15,165 - pyxdf.pyxdf - DEBUG -  Read tag: 4 at 95882352 bytes, length=22, StreamId=2
+        2026-04-01 06:14:15,165 - pyxdf.pyxdf - DEBUG -  Read tag: 4 at 95882376 bytes, length=22, StreamId=5
+        2026-04-01 06:14:15,166 - pyxdf.pyxdf - DEBUG -  Read tag: 4 at 95882400 bytes, length=22, StreamId=1
+        2026-04-01 06:14:15,167 - pyxdf.pyxdf - DEBUG -  Read tag: 6 at 95882427 bytes, length=88534, StreamId=5
+        2026-04-01 06:14:15,174 - pyxdf.pyxdf - DEBUG -  Read tag: 6 at 95970966 bytes, length=88489, StreamId=2
+        2026-04-01 06:14:15,181 - pyxdf.pyxdf - DEBUG -  Read tag: 6 at 96059460 bytes, length=88420, StreamId=4
+        2026-04-01 06:14:15,189 - pyxdf.pyxdf - DEBUG -  Read tag: 6 at 96147885 bytes, length=88505, StreamId=3
+        2026-04-01 06:14:15,195 - pyxdf.pyxdf - DEBUG -  Read tag: 6 at 96236395 bytes, length=88513, StreamId=6
+        2026-04-01 06:14:15,278 - pyxdf.pyxdf - DEBUG -  Read tag: 6 at 96324913 bytes, length=88500, StreamId=1
+        2026-04-01 06:14:15,916 - pyxdf.pyxdf - INFO -   performing clock synchronization...
+        ...
+
+        Which generally really slow things down.
+        """
         # debug_print = kwargs.pop('debug_print', False)
-        streams, header = pyxdf.load_xdf(a_xdf_file, synchronize_clocks=True, handle_clock_resets=True, dejitter_timestamps=False, verbose=True) ## disabled sync since it wasn't working anyway
+        streams, header = pyxdf.load_xdf(a_xdf_file, synchronize_clocks=True, handle_clock_resets=True, dejitter_timestamps=False, verbose=debug_print) ## disabled sync since it wasn't working anyway
         _obj = cls(xdf_file_path=a_xdf_file, xdf_streams=streams, xdf_header=header,
                 # skipped_stream_names=kwargs.pop('skipped_stream_names', None),
                 skipped_stream_names=skipped_stream_names,
@@ -763,13 +813,13 @@ class LabRecorderXDF:
 
             # raise e
 
-        ## END for stream in streams...
+        ## END for stream in self.xdf_streams...
 
         stream_infos: pd.DataFrame = pd.DataFrame.from_records(stream_infos)
 
         if ('stream_start_datetime' in stream_infos):
-            stream_infos = stream_infos.sort_values('stream_start_datetime', ascending=True, inplace=False)
-            earliest_stream_start_datetime: datetime = np.nanmin(stream_infos['stream_start_datetime'].to_numpy()) # Timestamp('2025-10-20 18:28:33-0400', tz='US/Eastern')
+            stream_infos = stream_infos.sort_values('stream_start_datetime', ascending=True, inplace=False, na_position='last')
+            earliest_stream_start_datetime: datetime = stream_infos['stream_start_datetime'].dropna().min() # Timestamp('2025-10-20 18:28:33-0400', tz='US/Eastern') # TODO#TODO 2026-03-29 05:41: - [ ] 'VideoRecorderMarkers' added by `continuous_video_recorder` is missing: ['stream_start_lsl_local_offset_seconds', 'stream_start_datetime', ...]
             stream_infos['stream_start_datetime_rel_to_earliest'] = (stream_infos['stream_start_datetime'] - earliest_stream_start_datetime) #.dt.total_seconds() #.to_numpy().total_seconds()
         else:
             earliest_stream_start_datetime = None
@@ -917,6 +967,20 @@ class LabRecorderXDF:
             raws_dict = datasets_dict
 
         return _obj
+
+
+    # @classmethod
+    # def up_convert_and_process_raw(cls, eeg_raw):
+    #     """ slow but inline 
+
+    #     eeg_raw = LabRecorderXDF.up_convert_and_process_raw(eeg_raw=eeg_raw)
+
+    #     """
+    #     from phopymnehelper.MNE_helpers import up_convert_raw_objects, up_convert_raw_obj
+    #     from phopymnehelper.EEG_data import EEGData
+    #     eeg_raw = up_convert_raw_obj(eeg_raw)
+    #     EEGData.set_montage(datasets_EEG=[eeg_raw])
+    #     return eeg_raw
 
 
     @classmethod

@@ -207,7 +207,24 @@ class EEGComputations:
                     raise
             
         return _all_outputs
-    
+
+
+    @classmethod
+    def run_all_with_graph(cls, raw, should_suppress_exceptions: bool = True, use_cache: bool = False, cache_root: Optional[Path] = None, session_path: Optional[Path] = None, session_mtime: Optional[float] = None, parallel: bool = False, max_workers: int = 4, **kwargs):
+        """Run the same computations as ``all_fcns_dict`` via the DAG executor (ordered dict compatible with ``run_all``). Optional per-node disk cache under *cache_root*."""
+        from phopymnehelper.analysis.computations.cache import DiskComputationCache
+        from phopymnehelper.analysis.computations.eeg_registry import run_eeg_graph_legacy_ordered, session_fingerprint_for_raw_or_path
+        try:
+            session = session_fingerprint_for_raw_or_path(raw, path=session_path, mtime=session_mtime)
+            cache = DiskComputationCache(Path(cache_root)) if (use_cache and cache_root is not None) else None
+            return run_eeg_graph_legacy_ordered(raw=raw, session=session, global_params=kwargs, cache=cache, use_cache=use_cache, parallel=parallel, max_workers=max_workers)
+        except Exception as e:
+            print(f'run_all_with_graph error: {e}.')
+            if not should_suppress_exceptions:
+                raise
+            return {}
+
+
     @classmethod
     def raw_morlet_cwt(cls, raw: mne.io.Raw, picks=None, wavelet_param=4, num_freq=60, fmax=50, spacing=12.5, **kwargs):
         """Compute continuous Morlet wavelet transform for MNE Raw EEG.
@@ -406,9 +423,9 @@ class EEGComputations:
         """ computes the bad epochs via the autoreject package, using global/local amplitude thresholds determined dynamically
 
         Usage:
-            from phoofflineeeganalysis.PendingNotebookCode import apply_autoreject_filter
+            from phopymnehelper.EEG_data import EEGComputations
 
-            epochs_cleaned, (epochs, reject_log), ica = apply_autoreject_filter(a_raw, epoch_fixed_duration=3)
+            epochs_cleaned, (epochs, reject_log), ica = EEGComputations.apply_autoreject_filter(a_raw, epoch_fixed_duration=3)
             epochs
             epochs_cleaned
 
@@ -471,21 +488,30 @@ class EEGComputations:
             return _empty_out
 
         try:
-            # Extract some info
-            sample_rate = raw.info["sfreq"]
+            import warnings as _warnings
+
+            _prep_keys = frozenset({"ransac", "channel_wise", "max_chunk_size", "random_state", "filter_kwargs", "reject_by_annotation", "matlab_strict"})
+            prep_extra = {k: v for k, v in kwargs.items() if k in _prep_keys}
+            sample_rate = float(raw.info["sfreq"])
             montage = raw.get_montage()
-            # Make a copy of the data
-            raw_copy = raw.copy()
+            n_eeg = len(mne.pick_types(raw.info, meg=False, eeg=True, exclude=[]))
+            line_upper = int(np.floor(sample_rate / 2.0))
+            prep_params = {"ref_chs": "eeg", "reref_chs": "eeg", "line_freqs": np.arange(60, line_upper, 60)}
+            use_ransac = bool(prep_extra["ransac"]) if "ransac" in prep_extra else (n_eeg >= 16)
 
-            # Fit prep
-            prep_params = {
-                "ref_chs": "eeg",
-                "reref_chs": "eeg",
-                "line_freqs": np.arange(60, sample_rate / 2, 60),
-            }
+            def _fit_prep(*, with_ransac: bool):
+                rc = raw.copy()
+                p = PrepPipeline(rc, prep_params, montage, **{**prep_extra, "ransac": with_ransac})
+                p.fit()
+                return p
 
-            prep = PrepPipeline(raw_copy, prep_params, montage)
-            prep.fit()
+            try:
+                prep = _fit_prep(with_ransac=use_ransac)
+            except IndexError as _idx_err:
+                if not use_ransac:
+                    raise
+                _warnings.warn(f"PrepPipeline RANSAC raised {_idx_err!r}; retrying with ransac=False.", RuntimeWarning, stacklevel=2)
+                prep = _fit_prep(with_ransac=False)
 
             interpolated_channels = list(prep.interpolated_channels)
             noisy_channels_original = dict(prep.noisy_channels_original)
