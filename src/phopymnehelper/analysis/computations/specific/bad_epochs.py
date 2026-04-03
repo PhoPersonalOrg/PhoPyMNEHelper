@@ -226,6 +226,10 @@ class BadEpochsQCComputation(SpecificComputationBase):
 
 
 
+# ==================================================================================================================================================================================================================================================================================== #
+# UI/Track Building to display results -- TODO doesn't belong here!                                                                                                                                                                                                                    #
+# ==================================================================================================================================================================================================================================================================================== #
+
 def ensure_bad_epochs_interval_track(timeline, result: Mapping[str, Any], *, time_offset: float = 0.0, track_name: str = BAD_EPOCH_INTERVALS_TRACK_DEFAULT_NAME) -> None:
     """Add or refresh a :class:`~pypho_timeline.rendering.datasources.track_datasource.IntervalProvidingTrackDatasource` strip for bad epochs.
 
