@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import json
 import warnings
-from typing import Any, Callable, ClassVar, Dict, FrozenSet, List, Mapping, Optional, Tuple
+from collections.abc import Mapping
+from typing import Any, Callable, ClassVar, Dict, FrozenSet, List, Optional, Tuple
 import phopymnehelper.type_aliases as types
 
 import mne
@@ -111,6 +112,33 @@ def _bad_sample_mask_to_intervals_rel(raw: mne.io.BaseRaw, mask: np.ndarray) -> 
         out.append((t0, t1))
         i = j
     return out
+
+
+def _bad_epochs_timeline_interval_pairs(result: Any, *, time_offset: float = 0.0) -> List[Tuple[float, float]]:
+    if isinstance(result, pd.DataFrame):
+        if result.empty:
+            return []
+        if "t_start" not in result.columns:
+            raise KeyError(f"bad epoch intervals DataFrame must contain 't_start'; columns: {list(result.columns)}")
+        t_start = pd.to_numeric(result["t_start"], errors="coerce")
+        if "t_end" in result.columns:
+            t_end = pd.to_numeric(result["t_end"], errors="coerce")
+        elif "t_duration" in result.columns:
+            t_end = t_start + pd.to_numeric(result["t_duration"], errors="coerce")
+        else:
+            raise KeyError(f"bad epoch intervals DataFrame must contain 't_end' or 't_duration'; columns: {list(result.columns)}")
+        valid_mask = t_start.notna() & t_end.notna() & (t_end > t_start)
+        return [(float(x0), float(x1)) for x0, x1 in zip(t_start.loc[valid_mask], t_end.loc[valid_mask])]
+    if isinstance(result, Mapping):
+        off = float(time_offset)
+        out: List[Tuple[float, float]] = []
+        for a, b in list(result.get("bad_epoch_intervals_rel") or []):
+            x0, x1 = off + float(a), off + float(b)
+            if x1 <= x0:
+                continue
+            out.append((x0, x1))
+        return out
+    raise NotImplementedError(f'not implemented type: type(result): {type(result)},\n\tresult: {result}')
 
 
 
@@ -217,13 +245,9 @@ def ensure_bad_epochs_interval_track(timeline, result: Mapping[str, Any], *, tim
 
     if isinstance(result, pd.DataFrame):
         intervals_df = result.copy()
-    elif isinstance(result, dict):
-        off = float(time_offset)
+    elif isinstance(result, Mapping):
         rows: List[Dict[str, float]] = []
-        for a, b in list(result.get("bad_epoch_intervals_rel") or []):
-            x0, x1 = off + float(a), off + float(b)
-            if x1 <= x0:
-                continue
+        for x0, x1 in _bad_epochs_timeline_interval_pairs(result, time_offset=time_offset):
             rows.append(dict(t_start=x0, t_duration=x1 - x0, t_end=x1))
         intervals_df = pd.DataFrame(rows) if rows else pd.DataFrame({"t_start": pd.Series(dtype=float), "t_duration": pd.Series(dtype=float), "t_end": pd.Series(dtype=float)})
     else:
@@ -271,12 +295,20 @@ def ensure_bad_epochs_interval_track(timeline, result: Mapping[str, Any], *, tim
         tr.refresh_overview()
 
 
-def apply_bad_epochs_overlays_to_timeline(timeline, result: Mapping[str, Any], *, time_offset: float = 0.0, z_value: float = 10.0, add_interval_track: bool = False) -> None:
+def apply_bad_epochs_overlays_to_timeline(timeline, result: Any, *, time_offset: float = 0.0, z_value: float = 10.0, add_interval_track: bool = False) -> None:
+    """Add or refresh bad-epoch overlay regions on EEG tracks.
+
+    If `result` is a `pd.DataFrame`, intervals are interpreted as already in timeline coordinates
+    using `t_start` plus either `t_end` or `t_duration`. If `result` is a mapping, endpoints come
+    from `bad_epoch_intervals_rel` and are shifted by `time_offset`.
+
+    new_regions = apply_bad_epochs_overlays_to_timeline(timeline, 
+    """
     import pyqtgraph as pg
 
     from pypho_timeline.rendering.datasources.specific.eeg import EEGSpectrogramTrackDatasource, EEGTrackDatasource
 
-    intervals = list(result.get("bad_epoch_intervals_rel") or [])
+    interval_pairs = _bad_epochs_timeline_interval_pairs(result, time_offset=time_offset)
     prev = getattr(timeline, "_bad_epochs_overlay_regions", None)
     if isinstance(prev, dict):
         for track_name, items in prev.items():
@@ -290,8 +322,9 @@ def apply_bad_epochs_overlays_to_timeline(timeline, result: Mapping[str, Any], *
                 except (AttributeError, RuntimeError, TypeError):
                     pass
     new_regions: Dict[str, List[Any]] = {}
-    brush = pg.mkBrush(0, 0, 0, int(round(255 * 0.9)))
-    pen = pg.mkPen(width=0)
+    brush = pg.mkBrush(0, 0, 0, int(round(255 * 0.7)))
+    # pen = pg.mkPen(width=0)
+    pen = pg.mkPen(None)
     for track_name in timeline.get_all_track_names():
         ds = timeline.track_datasources.get(track_name)
         if ds is None or not isinstance(ds, (EEGTrackDatasource, EEGSpectrogramTrackDatasource)):
@@ -300,12 +333,10 @@ def apply_bad_epochs_overlays_to_timeline(timeline, result: Mapping[str, Any], *
         if tw is None:
             continue
         pi = tw.getRootPlotItem()
+        extra_lin_region_kwargs = dict(clipItem=tw.active_plot_target)
         items: List[Any] = []
-        for a, b in intervals:
-            x0, x1 = float(time_offset) + float(a), float(time_offset) + float(b)
-            if x1 <= x0:
-                continue
-            reg = pg.LinearRegionItem(values=(x0, x1), movable=False, brush=brush, pen=pen)
+        for x0, x1 in interval_pairs:
+            reg = pg.LinearRegionItem(values=(x0, x1), movable=False, brush=brush, pen=pen) # **extra_lin_region_kwargs
             reg.setZValue(z_value)
             pi.addItem(reg)
             items.append(reg)
@@ -314,6 +345,7 @@ def apply_bad_epochs_overlays_to_timeline(timeline, result: Mapping[str, Any], *
     timeline._bad_epochs_overlay_regions = new_regions
     if add_interval_track:
         ensure_bad_epochs_interval_track(timeline, result, time_offset=time_offset)
+    return new_regions
 
 
 __all__ = [
