@@ -112,56 +112,7 @@ def _bad_sample_mask_to_intervals_rel(raw: mne.io.BaseRaw, mask: np.ndarray) -> 
     return out
 
 
-def compute_bad_epochs_qc(raw_eeg: mne.io.BaseRaw, *, l_freq: float = 1.0, h_freq: Optional[float] = 40.0, use_autoreject: bool = True, autoreject_epoch_sec: float = 3.0, autoreject_kwargs: Optional[Mapping[str, Any]] = None, bad_channel_kwargs: Optional[Mapping[str, Any]] = None, copy_raw: bool = True,
-                            t0: Optional[float]=None,
-                        ) -> Dict[str, Any]:
-    raw = raw_eeg.copy() if copy_raw else raw_eeg
-    raw.load_data()
-    nyq = 0.5 * float(raw.info["sfreq"])
-    eff_h_freq = h_freq
-    if eff_h_freq is not None and eff_h_freq >= nyq:
-        eff_h_freq = max(float(l_freq) + 1.0, nyq - 1.0)
-        warnings.warn(f"h_freq {h_freq} >= Nyquist ({nyq}); using {eff_h_freq}", RuntimeWarning, stacklevel=2)
-    raw.filter(l_freq=l_freq, h_freq=eff_h_freq, verbose=False)
-    bad_channel_result = EEGComputations.time_independent_bad_channels(raw, **dict(bad_channel_kwargs or {}))
-    ar_mask: Optional[np.ndarray] = None
-    if use_autoreject:
-        ar_mask = fit_autoreject_bad_sample_mask(raw, autoreject_epoch_sec=autoreject_epoch_sec, autoreject_kwargs=autoreject_kwargs)
-    bad_epoch_intervals_rel: List[Tuple[float, float]] = [] if ar_mask is None else _bad_sample_mask_to_intervals_rel(raw, ar_mask)
-    params = dict(l_freq=l_freq, h_freq=eff_h_freq, h_freq_requested=h_freq, use_autoreject=use_autoreject, autoreject_epoch_sec=autoreject_epoch_sec)
-    out: Dict[str, Any] = dict(bad_channel_result=bad_channel_result, bad_epoch_intervals_rel=bad_epoch_intervals_rel, params=params)
-    if bad_epoch_intervals_rel is not None:
-        
-        # # eeg_df: pd.DataFrame = eeg_ds.detailed_df.sort_values("t").reset_index(drop=True)
-        # # _t = raw.to_data_frame().sort_values("t").reset_index(drop=True)["t"]
-        # _t: float = raw.first_time
-        # # # first = int(raw.first_samp)
-        # # _t = raw.first_time
-        # print(f"type(_t): {type(_t)}, t: {_t}")
-        # # if pd.api.types.is_datetime64_any_dtype(_t):
-        # #     t0 = float(pd.to_datetime(_t, utc=True, errors="coerce").astype(np.int64).iloc[0] / 1e9)
-        # # else:
-        # #     t0 = float(pd.to_numeric(_t, errors="coerce").iloc[0])
-        # t0 = float(_t)
-        # print(f'\tt0: {t0}')
-        # ## OUTPUTS: t0
-        bad_epoch_intervals_df: pd.DataFrame = pd.DataFrame(bad_epoch_intervals_rel, columns=['t_start_rel', 't_end_rel'])
-        t_col_names: str = ['t_start', 't_end']
-        t_rel_col_names = [f'{a_t_col}_rel' for a_t_col in t_col_names]
 
-        if t0 is not None:
-            for a_t_col, a_t_rel_col in zip(t_col_names, t_rel_col_names):
-                bad_epoch_intervals_df[a_t_col] = bad_epoch_intervals_df[a_t_rel_col] + t0
-
-        ## add duration and other optional columns
-        bad_epoch_intervals_df['duration'] = bad_epoch_intervals_df['t_end_rel'] - bad_epoch_intervals_df['t_start_rel']
-        bad_epoch_intervals_df['label'] = bad_epoch_intervals_df.index.to_numpy().astype(int)
-
-        out['bad_epoch_intervals_df'] = bad_epoch_intervals_df
-
-    if ar_mask is not None:
-        out["autoreject_sample_mask"] = ar_mask
-    return out
 
 
 class BadEpochsQCComputation(SpecificComputationBase):
@@ -185,7 +136,60 @@ class BadEpochsQCComputation(SpecificComputationBase):
         # if t0 is None:
         #     t0 = ctx.earliest_unix_timestamp
 
-        return compute_bad_epochs_qc(ctx.raw, t0=t0, **kw)
+        return self.compute_bad_epochs_qc(ctx.raw, t0=t0, **kw)
+
+
+    @classmethod
+    def compute_bad_epochs_qc(cls, raw_eeg: mne.io.BaseRaw, *, l_freq: float = 1.0, h_freq: Optional[float] = 40.0, use_autoreject: bool = True, autoreject_epoch_sec: float = 3.0, autoreject_kwargs: Optional[Mapping[str, Any]] = None, bad_channel_kwargs: Optional[Mapping[str, Any]] = None, copy_raw: bool = True,
+                                t0: Optional[float]=None,
+                            ) -> Dict[str, Any]:
+        raw = raw_eeg.copy() if copy_raw else raw_eeg
+        raw.load_data()
+        nyq = 0.5 * float(raw.info["sfreq"])
+        eff_h_freq = h_freq
+        if eff_h_freq is not None and eff_h_freq >= nyq:
+            eff_h_freq = max(float(l_freq) + 1.0, nyq - 1.0)
+            warnings.warn(f"h_freq {h_freq} >= Nyquist ({nyq}); using {eff_h_freq}", RuntimeWarning, stacklevel=2)
+        raw.filter(l_freq=l_freq, h_freq=eff_h_freq, verbose=False)
+        bad_channel_result = EEGComputations.time_independent_bad_channels(raw, **dict(bad_channel_kwargs or {}))
+        ar_mask: Optional[np.ndarray] = None
+        if use_autoreject:
+            ar_mask = fit_autoreject_bad_sample_mask(raw, autoreject_epoch_sec=autoreject_epoch_sec, autoreject_kwargs=autoreject_kwargs)
+        bad_epoch_intervals_rel: List[Tuple[float, float]] = [] if ar_mask is None else _bad_sample_mask_to_intervals_rel(raw, ar_mask)
+        params = dict(l_freq=l_freq, h_freq=eff_h_freq, h_freq_requested=h_freq, use_autoreject=use_autoreject, autoreject_epoch_sec=autoreject_epoch_sec)
+        out: Dict[str, Any] = dict(bad_channel_result=bad_channel_result, bad_epoch_intervals_rel=bad_epoch_intervals_rel, params=params)
+        if bad_epoch_intervals_rel is not None:
+            
+            # # eeg_df: pd.DataFrame = eeg_ds.detailed_df.sort_values("t").reset_index(drop=True)
+            # # _t = raw.to_data_frame().sort_values("t").reset_index(drop=True)["t"]
+            # _t: float = raw.first_time
+            # # # first = int(raw.first_samp)
+            # # _t = raw.first_time
+            # print(f"type(_t): {type(_t)}, t: {_t}")
+            # # if pd.api.types.is_datetime64_any_dtype(_t):
+            # #     t0 = float(pd.to_datetime(_t, utc=True, errors="coerce").astype(np.int64).iloc[0] / 1e9)
+            # # else:
+            # #     t0 = float(pd.to_numeric(_t, errors="coerce").iloc[0])
+            # t0 = float(_t)
+            # print(f'\tt0: {t0}')
+            # ## OUTPUTS: t0
+            bad_epoch_intervals_df: pd.DataFrame = pd.DataFrame(bad_epoch_intervals_rel, columns=['start_t_rel', 'end_t_rel'])
+            t_col_names: str = ['start_t', 'end_t']
+            t_rel_col_names = [f'{a_t_col}_rel' for a_t_col in t_col_names]
+            if t0 is not None:
+                for a_t_col, a_t_rel_col in zip(t_col_names, t_rel_col_names):
+                    bad_epoch_intervals_df[a_t_col] = bad_epoch_intervals_df[a_t_rel_col] + t0
+
+            ## add duration and other optional columns
+            bad_epoch_intervals_df['duration'] = bad_epoch_intervals_df['end_t'] - bad_epoch_intervals_df['start_t']
+            bad_epoch_intervals_df['label'] = bad_epoch_intervals_df.index.to_numpy().astype(int)
+
+            out['bad_epoch_intervals_df'] = bad_epoch_intervals_df
+
+        if ar_mask is not None:
+            out["autoreject_sample_mask"] = ar_mask
+        return out
+
 
 
 def ensure_bad_epochs_interval_track(timeline, result: Mapping[str, Any], *, time_offset: float = 0.0, track_name: str = BAD_EPOCH_INTERVALS_TRACK_DEFAULT_NAME) -> None:
