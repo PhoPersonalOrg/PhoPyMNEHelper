@@ -1866,7 +1866,7 @@ provides-extras = ["video"]
 
 [[package]]
 name = "phopymnehelper"
-version = "0.3.2"
+version = "0.3.3"
 source = { editable = "." }
 dependencies = [
     { name = "autoreject" },
@@ -1904,7 +1904,7 @@ requires-dist = [
     { name = "h5py", specifier = ">=3.14.0" },
     { name = "meshio", specifier = ">=5.3.5" },
     { name = "mne", specifier = ">=1.8.0" },
-    { name = "numpy", specifier = ">=2.0.2" },
+    { name = "numpy", specifier = ">=2.2.6" },
     { name = "pandas", specifier = ">=1.5.3,<3.0.0" },
     { name = "phopylslhelper", editable = "../PhoPyLSLhelper" },
     { name = "polars", extras = ["all"], specifier = ">=1.39.3" },
