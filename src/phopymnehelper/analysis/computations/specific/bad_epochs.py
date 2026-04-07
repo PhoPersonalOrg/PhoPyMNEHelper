@@ -169,7 +169,7 @@ class BadEpochsQCComputation(SpecificComputationBase):
 
 
     @classmethod
-    def compute_bad_epochs_qc(cls, raw_eeg: mne.io.BaseRaw, *, l_freq: float = 1.0, h_freq: Optional[float] = 40.0, use_autoreject: bool = False, autoreject_epoch_sec: float = 3.0, autoreject_kwargs: Optional[Mapping[str, Any]] = None, bad_channel_kwargs: Optional[Mapping[str, Any]] = None, copy_raw: bool = True, t0: Optional[float]=None) -> Dict[str, Any]:
+    def compute_bad_epochs_qc(cls, raw_eeg: mne.io.BaseRaw, *, l_freq: float = 1.0, h_freq: Optional[float] = 40.0, use_autoreject: bool = True, autoreject_epoch_sec: float = 3.0, autoreject_kwargs: Optional[Mapping[str, Any]] = None, bad_channel_kwargs: Optional[Mapping[str, Any]] = None, copy_raw: bool = True, t0: Optional[float]=None) -> Dict[str, Any]:
         raw = raw_eeg.copy() if copy_raw else raw_eeg
         raw.load_data()
         nyq = 0.5 * float(raw.info["sfreq"])
