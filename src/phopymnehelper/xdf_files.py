@@ -20,6 +20,51 @@ from phopymnehelper.helpers.dataframe_accessor_helpers import CommonDataFrameAcc
 _log = logging.getLogger(__name__)
 
 
+def _resolve_stream_first_last_timestamp_sec(stream: dict, stream_info_dict: dict, stream_name: str, n_samples: int, fs: float) -> None:
+    """Fill missing ``first_timestamp`` / ``last_timestamp`` (and ``sample_count`` if absent) into ``stream_info_dict``.
+
+    Resolution order: (1) keys already merged from footer; (2) raw ``footer.info``; (3) min/max of ``time_stamps`` (source
+    ``time_stamps``); (4) ``created_at`` plus ``(n_samples - 1) / fs`` if stamps are empty (``created_at_heuristic``).
+
+    Logs a warning when salvaging. Raises ``ValueError`` if nothing can be inferred.
+    """
+    if stream_info_dict.get('sample_count', None) is None and n_samples > 0:
+        stream_info_dict['sample_count'] = float(n_samples)
+    need_first = stream_info_dict.get('first_timestamp', None) is None
+    need_last = stream_info_dict.get('last_timestamp', None) is None
+    if not need_first and not need_last:
+        return
+    finfo = stream.get('footer', {}).get('info', {})
+    ft = unwrap_single_element_listlike_if_needed(finfo.get('first_timestamp'))
+    lt = unwrap_single_element_listlike_if_needed(finfo.get('last_timestamp'))
+    if need_first and ft is not None:
+        stream_info_dict['first_timestamp'] = float(ft)
+        need_first = False
+    if need_last and lt is not None:
+        stream_info_dict['last_timestamp'] = float(lt)
+        need_last = False
+    if not need_first and not need_last:
+        return
+    ts = np.asarray(stream.get('time_stamps', []), dtype=float)
+    if ts.size >= 1:
+        if need_first:
+            stream_info_dict['first_timestamp'] = float(np.min(ts))
+        if need_last:
+            stream_info_dict['last_timestamp'] = float(np.max(ts))
+        _log.warning('XDF stream "%s": incomplete or missing stream footer; filled first/last from time_stamps where needed', stream_name)
+        return
+    if n_samples > 0 and fs > 0 and stream_info_dict.get('created_at', None) is not None:
+        c0 = float(stream_info_dict['created_at'])
+        c1 = c0 + float(n_samples - 1) / float(fs)
+        if need_first:
+            stream_info_dict['first_timestamp'] = c0
+        if need_last:
+            stream_info_dict['last_timestamp'] = c1
+        _log.warning('XDF stream "%s": missing footer and empty time_stamps; filled first/last from created_at and stream length', stream_name)
+        return
+    raise ValueError(f'XDF stream "{stream_name}": cannot resolve first_timestamp/last_timestamp (no footer, no time_stamps, no heuristic)')
+
+
 @pd.api.extensions.register_dataframe_accessor("xdf_streams")
 class XDFDataStreamAccessor(CommonDataFrameAccessorMixin):
     """ A Pandas pd.DataFrame representation of [start, stop, label] epoch intervals 
@@ -510,6 +555,8 @@ class LabRecorderXDF:
                     if a_value is not None:
                         stream_info_dict[a_key] = float(a_value)
 
+                _resolve_stream_first_last_timestamp_sec(stream, stream_info_dict, name, n_samples, fs)
+
                 ## Update the timestamp keys to float values, and the create a datetime column by adding them to the `file_datetime`
                 timestamp_keys = ('created_at', 'first_timestamp', 'last_timestamp')
                 for a_key in timestamp_keys:
@@ -528,17 +575,14 @@ class LabRecorderXDF:
                 stream_infos.append(stream_info_dict)
 
                 ## Process Data:
-                stream_first_timestamp: float = float(stream['footer']['info']['first_timestamp'][0]) # 29605.4462984
-                stream_last_timestamp: float = float(stream['footer']['info']['last_timestamp'][0]) # 30373.1166288
-
-                stream_first_timestamp = pd.Timedelta(seconds=stream_first_timestamp)
-                stream_last_timestamp = pd.Timedelta(seconds=stream_last_timestamp)
+                stream_first_timestamp = pd.Timedelta(seconds=float(stream_info_dict['first_timestamp']))
+                stream_last_timestamp = pd.Timedelta(seconds=float(stream_info_dict['last_timestamp']))
 
                 stream_approx_dur_sec: float = (stream_last_timestamp - stream_first_timestamp).total_seconds()
                 _log.debug('\tstream_approx_dur_sec: %s', stream_approx_dur_sec)
 
-                stream_timestamps = deepcopy(np.array(stream['time_stamps']))
-                stream_clock_times = deepcopy(np.array(stream['clock_times']))
+                stream_timestamps = np.asarray(stream.get('time_stamps', []), dtype=float).copy()
+                stream_clock_times = np.asarray(stream.get('clock_times', []), dtype=float).copy()
 
                 _log.debug('\tstream_timestamps: %s', stream_timestamps.tolist())
                 _log.debug('\tstream_clock_times: %s', stream_clock_times.tolist())
@@ -674,6 +718,8 @@ class LabRecorderXDF:
                         if a_value is not None:
                             stream_info_dict[a_key] = float(a_value)
 
+                    _resolve_stream_first_last_timestamp_sec(stream, stream_info_dict, name, n_samples, fs)
+
                     ## Update the timestamp keys to float values, and the create a datetime column by adding them to the `file_datetime`
                     timestamp_keys = ('created_at', 'first_timestamp', 'last_timestamp')
                     for a_key in timestamp_keys:
@@ -692,17 +738,14 @@ class LabRecorderXDF:
                     stream_infos.append(stream_info_dict)
 
                     ## Process Data:
-                    stream_first_timestamp: float = float(stream['footer']['info']['first_timestamp'][0]) # 29605.4462984
-                    stream_last_timestamp: float = float(stream['footer']['info']['last_timestamp'][0]) # 30373.1166288
-
-                    stream_first_timestamp = pd.Timedelta(seconds=stream_first_timestamp)
-                    stream_last_timestamp = pd.Timedelta(seconds=stream_last_timestamp)
+                    stream_first_timestamp = pd.Timedelta(seconds=float(stream_info_dict['first_timestamp']))
+                    stream_last_timestamp = pd.Timedelta(seconds=float(stream_info_dict['last_timestamp']))
 
                     stream_approx_dur_sec: float = (stream_last_timestamp - stream_first_timestamp).total_seconds()
                     _log.debug('\tstream_approx_dur_sec: %s', stream_approx_dur_sec)
 
-                    stream_timestamps = deepcopy(np.array(stream['time_stamps']))
-                    stream_clock_times = deepcopy(np.array(stream['clock_times']))
+                    stream_timestamps = np.asarray(stream.get('time_stamps', []), dtype=float).copy()
+                    stream_clock_times = np.asarray(stream.get('clock_times', []), dtype=float).copy()
 
                     _log.debug('\tstream_timestamps: %s', stream_timestamps.tolist())
                     _log.debug('\tstream_clock_times: %s', stream_clock_times.tolist())

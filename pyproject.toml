@@ -1,6 +1,6 @@
 [project]
 name = "phopymnehelper"
-version = "0.3.3"
+version = "0.3.4"
 description = "Wrappers for common MNE utilities, such as my personal electrode/head mesh configs"
 readme = "README.md"
 requires-python = ">=3.10,<3.12"
