@@ -533,7 +533,6 @@ class EEGComputations:
         # PREP Pipeline
         if not skip_trying_PREP:
             # _out_dict = dict(interpolated_channels=[], bad_channels_original=[], still_noisy_channels=[], noisy_channels_after_interpolation={}, all_bad_channels=[])
-
             try:
                 from pyprep.prep_pipeline import PrepPipeline
             except ImportError:
