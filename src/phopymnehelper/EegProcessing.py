@@ -2,7 +2,7 @@ import os
 import sys
 from copy import deepcopy
 from typing import Dict, List, Tuple, Optional, Callable, Union, Any
-from nptyping import NDArray
+from numpy.typing import NDArray
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import signal, fftpack

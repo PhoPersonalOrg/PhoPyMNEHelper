@@ -6,7 +6,6 @@ import uuid
 from copy import deepcopy
 from typing import Dict, List, Tuple, Optional, Callable, Union, Any
 import h5py
-from nptyping import NDArray
 from matplotlib import pyplot as plt
 
 from pathlib import Path
@@ -27,8 +26,6 @@ from mne.io import read_raw
 mne.viz.set_browser_backend("Matplotlib")
 
 # from ..EegProcessing import bandpower
-from numpy.typing import NDArray
-
 import autoreject # apply_autoreject_filter
 
 set_log_level("WARNING")

@@ -5,11 +5,12 @@ from datetime import datetime, timezone, timedelta
 import uuid
 from copy import deepcopy
 from typing import Dict, List, Tuple, Optional, Callable, Union, Any
-from nptyping import NDArray
+
 
 from pathlib import Path
 import scipy.io
 import numpy as np
+from numpy.typing import NDArray
 import pandas as pd
 
 import mne
@@ -20,7 +21,6 @@ mne.viz.set_browser_backend("Matplotlib")
 
 # from phopymnehelper.EegProcessing import bandpower
 # from ..EegProcessing import bandpower
-from numpy.typing import NDArray
 
 
 set_log_level("WARNING")

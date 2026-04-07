@@ -7,7 +7,6 @@ from pypho_timeline.utils.datetime_helpers import datetime_to_unix_timestamp
 import uuid
 from copy import deepcopy
 from typing import Dict, List, Tuple, Optional, Callable, Union, Any
-from nptyping import NDArray
 
 from pathlib import Path
 import numpy as np

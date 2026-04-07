@@ -2,8 +2,6 @@ from collections import namedtuple
 from copy import deepcopy
 from itertools import islice
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union, cast
-import nptyping as ND
-from nptyping import NDArray
 import numpy as np
 import pandas as pd
 import polars as pl

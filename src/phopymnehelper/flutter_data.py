@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import uuid
 from copy import deepcopy
 from typing import Dict, List, Tuple, Optional, Callable, Union, Any
-from nptyping import NDArray
+from numpy.typing import NDArray
 from matplotlib import pyplot as plt
 
 from pathlib import Path
@@ -21,9 +21,7 @@ from phopymnehelper.motion_data import MotionData ## for creating single EDF+ fi
 
 # from phopymnehelper.EegProcessing import bandpower
 from phopymnehelper.MNE_helpers import MNEHelpers
-# from ..EegProcessing import bandpower
-from numpy.typing import NDArray
-# from nptyping import NDArray
+
 
 set_log_level("WARNING")
 
