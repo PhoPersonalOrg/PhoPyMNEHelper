@@ -1,6 +1,6 @@
 [project]
 name = "phopymnehelper"
-version = "0.3.0"
+version = "0.3.2"
 description = "Wrappers for common MNE utilities, such as my personal electrode/head mesh configs"
 readme = "README.md"
 requires-python = ">=3.10,<3.12"
@@ -18,6 +18,10 @@ dependencies = [
     "pyprep>=0.6.0",
     "polars[all]>=1.39.3",
     "autoreject>=0.4.3",
+    "pyxdf>=1.17.2",
+    "python-benedict>=0.35.0",
+    "phopylslhelper",
+    "dill>=0.3.5.1",
 ]
 
 [tool.pyrefly]
@@ -25,6 +29,9 @@ project-includes = [
     "**/*.py*",
     "**/*.ipynb",
 ]
+
+[tool.uv.sources]
+phopylslhelper = { path = "../PhoPyLSLhelper", editable = true }
 
 [build-system]
 requires = ["hatchling"]

@@ -5,3 +5,4 @@ dependencies = [
 
 [tool.uv.sources]
 mne = { path = "../../mne-python", editable = true }
+phopylslhelper = { path = "../PhoPyLSLhelper", editable = true }
