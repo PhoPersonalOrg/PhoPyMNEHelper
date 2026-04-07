@@ -326,6 +326,7 @@ class EEGComputations:
         
         return out_dict
 
+
     @classmethod
     def raw_spectogram_working(cls, raw: mne.io.Raw, picks=None, nperseg=1024, noverlap=512, mask_bad_annotated_times: bool=True):
         """Compute continuous spectrogram for MNE Raw EEG.
@@ -415,6 +416,56 @@ class EEGComputations:
     # Channel Quality Determination/Bad Channels                                                                                                                                                                                                                                           #
     # ==================================================================================================================================================================================================================================================================================== #
 
+
+    @classmethod
+    def detect_bad_channels_sliding_window(cls, raw: mne.io.Raw, *, eeg_reference='average', projection=False, l_freq=1.0, h_freq=40.0, fir_design='firwin', picks='eeg', window_sec=10.0, step_sec=5.0,
+                                        z_rms_threshold=3.0, mean_corr_threshold=0.4, bad_fraction_threshold=0.3, copy_raw=True) -> Dict:
+        """Sliding-window RMS z-score + mean |correlation| heuristic for bad EEG channels.
+        _out_bad_channels_dict = EEGComputations.detect_bad_channels_sliding_window(raw=a_raw)
+        bad_chs = _out_bad_channels_dict['bad_chs']
+        _out_bad_channels_dict['bad_mask'] ## for whole data
+        _out_bad_channels_dict['good_chs']
+
+        ## actually set on object
+        a_raw.info['bads'] = bad_chs
+
+        """
+        def compute_rms(x):
+            return np.sqrt(np.mean(x**2, axis=1))
+
+        def mean_channel_corr(x):
+            C = np.corrcoef(x)
+            return np.nanmean(np.abs(C), axis=1)
+
+        a_raw = raw.copy() if copy_raw else raw
+        a_raw.set_eeg_reference(eeg_reference, projection=projection)
+        a_raw.filter(l_freq, h_freq, fir_design=fir_design)
+
+        sfreq = float(a_raw.info['sfreq'])
+        data = a_raw.get_data(picks=picks)
+
+        win = int(window_sec * sfreq)
+        step = int(step_sec * sfreq)
+        n_ch, n_t = data.shape
+
+        bad_mask = []
+        for start in range(0, n_t - win, step):
+            w = data[:, start : start + win]
+            rms = compute_rms(w)
+            z_rms = (rms - rms.mean()) / (rms.std() if rms.std() > 0 else np.nan)
+            mcorr = mean_channel_corr(w)
+            bad = (np.abs(z_rms) > z_rms_threshold) | (mcorr < mean_corr_threshold)
+            bad_mask.append(bad)
+
+        bad_mask = np.array(bad_mask)
+        bad_fraction = bad_mask.mean(axis=0)
+        ch_names = np.array(a_raw.ch_names)
+        bad_chs = ch_names[bad_fraction > bad_fraction_threshold].tolist()
+        good_chs = sorted(set(a_raw.ch_names) - set(bad_chs))
+
+        return {'bad_chs': bad_chs, 'good_chs': good_chs, 'bad_fraction': bad_fraction, 'bad_mask': bad_mask}
+
+
     @classmethod
     def apply_autoreject_filter(cls, a_raw, epoch_fixed_duration=3, should_plot: bool = False):
         """ computes the bad epochs via the autoreject package, using global/local amplitude thresholds determined dynamically
@@ -469,69 +520,112 @@ class EEGComputations:
 
 
     @classmethod
-    def time_independent_bad_channels(cls, raw: mne.io.Raw, **kwargs) -> dict:
-        """Detect low-quality EEG channels across the entire recording using pyprep.
+    def time_independent_bad_channels(cls, raw: mne.io.Raw, skip_trying_PREP: bool=True, debug_print: bool=True, **kwargs) -> dict:
+        """Detect low-quality EEG channels across the entire recording/session using pyprep.
 
         Uses ``pyprep.prep_pipeline`` on the entire EEG recording without gaps
 
         """
-        _empty_out = dict(interpolated_channels=[], bad_channels_original=[], still_noisy_channels=[], noisy_channels_after_interpolation={}, all_bad_channels=[])
+        did_find_bad_channels: bool = False
 
-        try:
-            from pyprep.prep_pipeline import PrepPipeline
-        except ImportError:
-            import warnings
-            warnings.warn("pyprep is not installed; skipping time-independent bad-channel detection. Install with: uv add pyprep", RuntimeWarning, stacklevel=2)
-            return _empty_out
+        _out_dict = dict(interpolated_channels=[], bad_channels_original=[], still_noisy_channels=[], noisy_channels_after_interpolation={}, all_bad_channels=[])
 
-        try:
-            import warnings as _warnings
-
-            _prep_keys = frozenset({"ransac", "channel_wise", "max_chunk_size", "random_state", "filter_kwargs", "reject_by_annotation", "matlab_strict"})
-            prep_extra = {k: v for k, v in kwargs.items() if k in _prep_keys}
-            sample_rate = float(raw.info["sfreq"])
-            montage = raw.get_montage()
-            n_eeg = len(mne.pick_types(raw.info, meg=False, eeg=True, exclude=[]))
-            line_upper = int(np.floor(sample_rate / 2.0))
-            prep_params = {"ref_chs": "eeg", "reref_chs": "eeg", "line_freqs": np.arange(60, line_upper, 60)}
-            use_ransac = bool(prep_extra["ransac"]) if "ransac" in prep_extra else (n_eeg >= 16)
-
-            def _fit_prep(*, with_ransac: bool):
-                rc = raw.copy()
-                p = PrepPipeline(rc, prep_params, montage, **{**prep_extra, "ransac": with_ransac})
-                p.fit()
-                return p
+        # PREP Pipeline
+        if not skip_trying_PREP:
+            # _out_dict = dict(interpolated_channels=[], bad_channels_original=[], still_noisy_channels=[], noisy_channels_after_interpolation={}, all_bad_channels=[])
 
             try:
-                prep = _fit_prep(with_ransac=use_ransac)
-            except IndexError as _idx_err:
-                if not use_ransac:
-                    raise
-                _warnings.warn(f"PrepPipeline RANSAC raised {_idx_err!r}; retrying with ransac=False.", RuntimeWarning, stacklevel=2)
-                prep = _fit_prep(with_ransac=False)
+                from pyprep.prep_pipeline import PrepPipeline
+            except ImportError:
+                import warnings
+                warnings.warn("pyprep is not installed; skipping time-independent bad-channel detection. Install with: uv add pyprep", RuntimeWarning, stacklevel=2)
+                # return _out_dict
 
-            interpolated_channels = list(prep.interpolated_channels)
-            noisy_channels_original = dict(prep.noisy_channels_original)
-            bad_channels_original = list(noisy_channels_original.get("bad_all", []))
-            still_noisy_channels = list(prep.still_noisy_channels)
-            noisy_channels_after_interpolation = dict(prep.noisy_channels_after_interpolation)
+            try:
+                import warnings as _warnings
+                _prep_keys = frozenset({"ransac", "channel_wise", "max_chunk_size", "random_state", "filter_kwargs", "reject_by_annotation", "matlab_strict"})
+                prep_extra = {k: v for k, v in kwargs.items() if k in _prep_keys}
+                sample_rate = float(raw.info["sfreq"])
+                montage = raw.get_montage()
+                n_eeg = len(mne.pick_types(raw.info, meg=False, eeg=True, exclude=[]))
+                line_upper = int(np.floor(sample_rate / 2.0))
+                prep_params = {"ref_chs": "eeg", "reref_chs": "eeg", "line_freqs": np.arange(60, line_upper, 60)}
+                use_ransac = bool(prep_extra["ransac"]) if "ransac" in prep_extra else (n_eeg >= 16)
 
-            print(f"Bad channels: {interpolated_channels}")
-            print(f"Bad channels original: {bad_channels_original}")
-            print(f"Bad channels after interpolation: {still_noisy_channels}")
+                def _fit_prep(*, with_ransac: bool):
+                    rc = raw.copy()
+                    p = PrepPipeline(rc, prep_params, montage, **{**prep_extra, "ransac": with_ransac})
+                    p.fit()
+                    return p
 
-            # Union of all detected bad channels so downstream stages can skip them.
-            all_bad_channels = sorted(set(bad_channels_original) | set(still_noisy_channels))
+                try:
+                    prep = _fit_prep(with_ransac=use_ransac)
+                except IndexError as _idx_err:
+                    if not use_ransac:
+                        raise
+                    _warnings.warn(f"PrepPipeline RANSAC raised {_idx_err!r}; retrying with ransac=False.", RuntimeWarning, stacklevel=2)
+                    prep = _fit_prep(with_ransac=False)
 
-            # Persist bad channels onto the original Raw object for subsequent computations.
-            raw.info["bads"] = sorted(set(list(raw.info.get("bads") or []) + all_bad_channels))
+                interpolated_channels = list(prep.interpolated_channels)
+                noisy_channels_original = dict(prep.noisy_channels_original)
+                bad_channels_original = list(noisy_channels_original.get("bad_all", []))
+                still_noisy_channels = list(prep.still_noisy_channels)
+                noisy_channels_after_interpolation = dict(prep.noisy_channels_after_interpolation)
 
-            return dict(interpolated_channels=interpolated_channels, bad_channels_original=bad_channels_original, still_noisy_channels=still_noisy_channels, noisy_channels_after_interpolation=noisy_channels_after_interpolation, all_bad_channels=all_bad_channels)
+                if debug_print:
+                    print(f"\tBad channels: {interpolated_channels}")
+                    print(f"\tBad channels original: {bad_channels_original}")
+                    print(f"\tBad channels after interpolation: {still_noisy_channels}")
 
-        except Exception as e:
-            import warnings
-            warnings.warn(f"PrepPipeline failed ({type(e).__name__}: {e}); no channels marked bad.", RuntimeWarning, stacklevel=2)
-            return _empty_out
+                # Union of all detected bad channels so downstream stages can skip them.
+                all_bad_channels = sorted(set(bad_channels_original) | set(still_noisy_channels))
+
+                # Persist bad channels onto the original Raw object for subsequent computations.
+                raw.info["bads"] = sorted(set(list(raw.info.get("bads") or []) + all_bad_channels))
+
+                did_find_bad_channels = True
+                _out_dict = dict(interpolated_channels=interpolated_channels, bad_channels_original=bad_channels_original, still_noisy_channels=still_noisy_channels, noisy_channels_after_interpolation=noisy_channels_after_interpolation,
+                            all_bad_channels=all_bad_channels)
+
+            except Exception as e:
+                import warnings
+                warnings.warn(f"PrepPipeline failed ({type(e).__name__}: {e}); no channels marked bad.", RuntimeWarning, stacklevel=2)
+                did_find_bad_channels = False
+                # return _empty_out
+
+
+
+        if not did_find_bad_channels:
+            try:
+                ## try custom output
+                print(f'trying EEGComputations.detect_bad_channels_sliding_window(...) to detect bad channels...')
+                _out_bad_channels_dict = EEGComputations.detect_bad_channels_sliding_window(raw=raw)
+                all_bad_channels = _out_bad_channels_dict['bad_chs']
+                # _out_bad_channels_dict['bad_mask'] ## for whole data
+                good_chs = _out_bad_channels_dict['good_chs']
+
+                did_find_bad_channels = True
+                _out_dict = _out_dict | dict(all_bad_channels=all_bad_channels, bad_fraction=_out_bad_channels_dict.get('bad_fraction', None),  
+                                            bad_mask=_out_bad_channels_dict.get('bad_mask', None), good_chs=_out_bad_channels_dict.get('good_chs', None),
+                )
+
+                if debug_print:
+                    print(f"\tBad channels: {all_bad_channels}")
+                    print(f"\tGood channels: {good_chs}")
+
+                ## actually set on object
+                # raw.info['bads'] = all_bad_channels
+                # Persist bad channels onto the original Raw object for subsequent computations.
+                raw.info["bads"] = sorted(set(list(raw.info.get("bads") or []) + all_bad_channels))
+
+            except Exception as e:
+                import warnings
+                warnings.warn(f"EEGComputations.detect_bad_channels_sliding_window(...) failed ({type(e).__name__}: {e}); no channels marked bad.", RuntimeWarning, stacklevel=2)
+                did_find_bad_channels = False
+                # raise e
+
+        return _out_dict
+
 
 
     @classmethod
