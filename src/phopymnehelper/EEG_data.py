@@ -1,5 +1,6 @@
 import time
 import re
+import warnings
 from datetime import datetime, timezone
 
 import uuid
@@ -235,6 +236,10 @@ class EEGComputations:
         """
         if picks is None:
             picks = mne.pick_types(raw.info, eeg=True, meg=False)
+        picks = np.asarray(picks, dtype=int).ravel()
+        if picks.size == 0:
+            warnings.warn("No EEG channels available for Morlet CWT (empty picks).", RuntimeWarning, stacklevel=2)
+            return None
 
         fs = raw.info["sfreq"]
         data = raw.get_data(picks=picks)
@@ -369,6 +374,11 @@ class EEGComputations:
             picks = mne.pick_types(raw.info, eeg=True, meg=False, exclude='bads')
         else:
             picks = [p for p in picks if raw.info.ch_names[p] not in bads]
+
+        picks = np.asarray(picks, dtype=int).ravel()
+        if picks.size == 0:
+            warnings.warn("No EEG channels remain for spectrogram after exclusions or none are present.", RuntimeWarning, stacklevel=2)
+            return None
 
         fs: float = raw.info["sfreq"]
 
