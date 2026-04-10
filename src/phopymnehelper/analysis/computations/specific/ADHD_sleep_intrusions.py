@@ -47,6 +47,9 @@ from phopymnehelper.analysis.computations.protocol import ArtifactKind, RunConte
 from phopymnehelper.analysis.computations.specific.bad_epochs import fit_autoreject_bad_sample_mask
 from phopymnehelper.analysis.computations.specific.base import SpecificComputationBase
 
+import logging
+logger = logging.getLogger(__name__)
+
 
 THETA_DELTA_SLEEP_INTRUSION_PARAM_KEYS: FrozenSet[str] = frozenset(
     {
@@ -324,21 +327,67 @@ class ThetaDeltaSleepIntrusionComputation(SpecificComputationBase):
 
 
     def compute(self, ctx: RunContext, params: Mapping[str, Any], dep_outputs: Mapping[str, Any]) -> Any:
+        """
+
+        Usage:
+            from phopymnehelper.analysis.computations.eeg_registry import run_eeg_computations_graph, session_fingerprint_for_raw_or_path
+            from phopymnehelper.analysis.computations.specific.ADHD_sleep_intrusions import ThetaDeltaSleepIntrusionComputation, apply_adhd_sleep_intrusion_to_timeline
+
+            active_nearest_sess_idx: int = 2
+            eeg_raw = eeg_ds.get_sorted_and_extracted_raws(eeg_ds.raw_datasets_dict)[active_nearest_sess_idx]
+
+            _curr_compute_key: str = "theta_delta_sleep_intrusion"
+            eeg_comps_result = run_eeg_computations_graph(eeg_raw, session=session_fingerprint_for_raw_or_path(eeg_raw), goals=(_curr_compute_key,))
+            _curr_compute_result = eeg_comps_result[_curr_compute_key]
+            adhd_ctx = _curr_compute_result.copy()
+            out_adhd = adhd_ctx['out']
+            print("session_mean_theta_delta", out_adhd["session_mean_theta_delta"], "valid", out_adhd["n_valid_windows"], "/", out_adhd["n_windows"])
+            print(f'theta_delta_ratio: {out_adhd["theta_delta_ratio"]}')
+
+            ## OUTPUTS: adhd_ctx, out_adhd
+
+        """
         if ctx.raw is None:
             raise ValueError("ThetaDeltaSleepIntrusionComputation requires ctx.raw")
         kw = filter_theta_delta_sleep_intrusion_params(params)
+
+        motion_name = kw.pop("motion_name", None)
         motion_df = kw.pop("motion_df", None)
         t0_param = kw.pop("t0", None)
         t0_plot = float(t0_param) if t0_param is not None else float(ctx.extras.get("t0", 0.0))
         eeg_name = ctx.extras.get("eeg_name")
         eeg_ds = ctx.extras.get("eeg_ds")
+        if eeg_ds is not None:
+            eeg_df = eeg_ds.detailed_df.sort_values("t").reset_index(drop=True).copy()
+        else:
+            eeg_df = None
+
+        logger.debug("\teeg_name=", eeg_name, "motion_name=", motion_name) # , "sfreq=", sfreq, "ch=", len(_ch)
+
+        adhd_ctx = dict(eeg_name=eeg_name, eeg_ds=eeg_ds, eeg_df=eeg_df, t0=t0_plot, raw=None, out={}) # dict(motion_name=motion_name, motion_df=motion_df_adhd, raw=raw_adhd) 
+        # adhd_ctx.update(**{k:v for k, v in dict(motion_name=motion_name, motion_df=motion_df_adhd, raw=raw_adhd).items() if v is not None})
+        adhd_ctx.update(**{k:v for k, v in dict(motion_name=motion_name, motion_df=motion_df, raw=ctx.raw).items() if v is not None})
+
+        logger.info(f'running compute_theta_delta_sleep_intrusion_series(...)...')
         out_adhd = compute_theta_delta_sleep_intrusion_series(ctx.raw, motion_df=motion_df, **kw)
-        apply_fn = lambda timeline: apply_adhd_sleep_intrusion_to_timeline(timeline, out_adhd, t0=t0_plot, eeg_name=eeg_name, eeg_ds=eeg_ds)
-        out_adhd["apply_adhd_sleep_intrusion_to_timeline_plot_callback_fn"] = apply_fn
-        return out_adhd
+        adhd_ctx['out'].update(**out_adhd)
+        logger.info(f'\tdone.')
+    
+        logger.info(f'building callback apply_adhd_sleep_intrusion_to_timeline(...)...')
+        # apply_fn = lambda timeline: apply_adhd_sleep_intrusion_to_timeline(timeline, out_adhd, t0=t0_plot, eeg_name=eeg_name, eeg_ds=eeg_ds)
+        apply_fn = lambda timeline: apply_adhd_sleep_intrusion_to_timeline(timeline, adhd_ctx, t0=t0_plot, eeg_name=eeg_name, eeg_ds=eeg_ds)
+
+        # out_adhd["apply_adhd_sleep_intrusion_to_timeline_plot_callback_fn"] = apply_fn
+        adhd_ctx['out']['apply_adhd_sleep_intrusion_to_timeline_plot_callback_fn'] = apply_fn
+        logger.info(f'\tdone.')
+        
+        logger.info(f'session_mean_theta_delta: {out_adhd["session_mean_theta_delta"]}, valid: {out_adhd["n_valid_windows"]}/{out_adhd["n_windows"]}, theta_delta_ratio: {out_adhd["theta_delta_ratio"]}')
+
+        # return out_adhd
+        return adhd_ctx
 
 
-def _apply_adhd_sleep_intrusion_to_timeline_impl(timeline, result: Mapping[str, Any], *, t0: float, eeg_name: Optional[str], eeg_ds: Any) -> None:
+def _apply_adhd_sleep_intrusion_to_timeline_impl(timeline, result: Mapping[str, Any], *, t0: float, eeg_name: Optional[str], eeg_ds: Any, draw_on_existing_track: bool=False) -> None:
     """ ADHD sleep-like intrusions """
     from datetime import datetime
 
@@ -346,6 +395,8 @@ def _apply_adhd_sleep_intrusion_to_timeline_impl(timeline, result: Mapping[str, 
     from pypho_timeline.core.synchronized_plot_mode import SynchronizedPlotMode
     from pypho_timeline.rendering.datasources.specific.eeg import EEGTrackDatasource
     from pypho_timeline.utils.datetime_helpers import datetime_to_unix_timestamp, float_to_datetime
+
+    analysis_name = "ANALYSIS_theta_delta"
 
     out = result
     if out is None:
@@ -368,37 +419,66 @@ def _apply_adhd_sleep_intrusion_to_timeline_impl(timeline, result: Mapping[str, 
         y_track_hi = 2.0
     y_track_hi = y_track_hi * 1.02
     y_overlay = np.clip(y / ymax, 0.0, 1.0)
-    ew, _, _ = timeline.get_track_tuple(eeg_name)
-    if ew is None:
-        print("Missing EEG widget for", eeg_name)
+
+    adhd_ctx = dict(eeg_name=eeg_name, motion_name=motion_name, eeg_ds=eeg_ds, eeg_df=eeg_df, t0=t0, raw=raw_adhd, motion_df=motion_df_adhd, out=None)
+    # print("eeg_name=", eeg_name, "motion_name=", motion_name, "sfreq=", sfreq, "ch=", len(_ch))
+    does_already_exist: bool = (analysis_name in timeline.track_renderers)
+    
+    if draw_on_existing_track:
+        ew, _, _ = timeline.get_track_tuple(eeg_name)
+        if ew is None:
+            # print("Missing EEG widget for", eeg_name)
+            logger.error(f"{analysis_name}: Missing EEG widget for eeg_name: '{eeg_name}'.")
+
+            return
+        eeg_pi = ew.getRootPlotItem()
+        if (not hasattr(timeline, "_adhd_theta_delta_overlay")) or (timeline._adhd_theta_delta_overlay is None):
+            timeline._adhd_theta_delta_overlay = pg.PlotDataItem(x=x_abs, y=y_overlay, pen=pg.mkPen("#9467bd", width=2))
+            eeg_pi.addItem(timeline._adhd_theta_delta_overlay)
+        else:
+            timeline._adhd_theta_delta_overlay.setData(x=x_abs, y=y_overlay)
+
+
+    if does_already_exist:
+        logger.warn(f"{analysis_name}: already present; overlay updated only.")
+        ratio_track_widget, ratio_track, ratio_ds = timeline.get_track_tuple(analysis_name) ## get existing
+        ratio_plot_item = ratio_track_widget.getRootPlotItem()
+        if ratio_plot_item is not None:
+            ratio_plot_item.setYRange(0, y_track_hi, padding=0.02)
+
         return
-    eeg_pi = ew.getRootPlotItem()
-    if (not hasattr(timeline, "_adhd_theta_delta_overlay")) or (timeline._adhd_theta_delta_overlay is None):
-        timeline._adhd_theta_delta_overlay = pg.PlotDataItem(x=x_abs, y=y_overlay, pen=pg.mkPen("#9467bd", width=2))
-        eeg_pi.addItem(timeline._adhd_theta_delta_overlay)
+
     else:
-        timeline._adhd_theta_delta_overlay.setData(x=x_abs, y=y_overlay)
-    analysis_name = "ANALYSIS_theta_delta"
-    if analysis_name in timeline.track_renderers:
-        print(analysis_name, "already present; overlay updated only.")
-        return
-    detailed = pd.DataFrame({"t": x_abs, "theta_delta": y})
-    ratio_ds = EEGTrackDatasource(intervals_df=eeg_ds.intervals_df.copy(), eeg_df=detailed, custom_datasource_name=analysis_name, max_points_per_second=64.0, enable_downsampling=True, channel_names=["theta_delta"], normalize=False, plot_pen_colors=["#9467bd"], plot_pen_width=0.8)
-    timeline.TrackRenderingMixin_on_buildUI() ## we don't need this manual call I don't think
-    track_widget, _root, plot_item, _dock = timeline.add_new_embedded_pyqtgraph_render_plot_widget(name=analysis_name, dockSize=(500, 80), dockAddLocationOpts=["bottom"], sync_mode=SynchronizedPlotMode.TO_GLOBAL_DATA)
-    if isinstance(timeline.total_data_start_time, (datetime, pd.Timestamp)):
-        plot_item.setXRange(datetime_to_unix_timestamp(timeline.total_data_start_time), datetime_to_unix_timestamp(timeline.total_data_end_time), padding=0)
-    elif timeline.reference_datetime is not None:
-        plot_item.setXRange(datetime_to_unix_timestamp(float_to_datetime(timeline.total_data_start_time, timeline.reference_datetime)), datetime_to_unix_timestamp(float_to_datetime(timeline.total_data_end_time, timeline.reference_datetime)), padding=0)
-    else:
-        plot_item.setXRange(float(timeline.total_data_start_time), float(timeline.total_data_end_time), padding=0)
-    plot_item.setTitle("ADHD sleep intrusion series (NaN = motion/QC excluded)")
-    plot_item.setLabel("bottom", "Time (unix s)")
-    plot_item.setLabel("left", "theta / delta")
-    plot_item.setYRange(0, y_track_hi, padding=0.02)
-    plot_item.showAxis("left")
-    timeline.add_track(ratio_ds, name=analysis_name, plot_item=plot_item)
-    track_widget.optionsPanel = track_widget.getOptionsPanel()
+        logger.info(f"{analysis_name}: does not exist; creating!")
+        detailed = pd.DataFrame({"t": x_abs, "theta_delta": y})
+        ratio_ds = EEGTrackDatasource(intervals_df=eeg_ds.intervals_df.copy(), eeg_df=detailed, custom_datasource_name=analysis_name, max_points_per_second=64.0, enable_downsampling=True, channel_names=["theta_delta"], normalize=False, plot_pen_colors=["#9467bd"], plot_pen_width=0.8,
+                                    lab_obj_dict=getattr(eeg_ds, "lab_obj_dict", None), raw_datasets_dict=getattr(eeg_ds, "raw_datasets_dict", None))
+        # timeline.TrackRenderingMixin_on_buildUI() ## we don't need this manual call I don't think
+        ratio_track_widget, _root, ratio_plot_item, ratio_dock = timeline.add_new_embedded_pyqtgraph_render_plot_widget(name=ratio_ds.custom_datasource_name, dockSize=(500, 60), dockAddLocationOpts=["bottom"], sync_mode=SynchronizedPlotMode.TO_GLOBAL_DATA)
+
+        ## sets proper window from the EEG ds:
+        ref_name = eeg_ds.custom_datasource_name
+        if ref_name in timeline.ui.matplotlib_view_widgets:
+            ref_plot = timeline.ui.matplotlib_view_widgets[ref_name].getRootPlotItem()
+            x0, x1 = ref_plot.getViewBox().viewRange()[0]
+            ratio_plot_item.setXRange(x0, x1, padding=0)
+
+        # if isinstance(timeline.total_data_start_time, (datetime, pd.Timestamp)):
+        #     ratio_plot_item.setXRange(datetime_to_unix_timestamp(timeline.total_data_start_time), datetime_to_unix_timestamp(timeline.total_data_end_time), padding=0)
+        # elif timeline.reference_datetime is not None:
+        #     ratio_plot_item.setXRange(datetime_to_unix_timestamp(float_to_datetime(timeline.total_data_start_time, timeline.reference_datetime)), datetime_to_unix_timestamp(float_to_datetime(timeline.total_data_end_time, timeline.reference_datetime)), padding=0)
+        # else:
+        #     ratio_plot_item.setXRange(float(timeline.total_data_start_time), float(timeline.total_data_end_time), padding=0)
+
+        ratio_plot_item.setTitle("ADHD sleep intrusion series (NaN = motion/QC excluded)")
+        ratio_plot_item.setLabel("bottom", "Time (unix s)")
+        ratio_plot_item.setLabel("left", "theta / delta")
+        ratio_plot_item.setYRange(0, y_track_hi, padding=0.02)
+        ratio_plot_item.showAxis("left")
+        ratio_track_renderer = timeline.add_track(ratio_ds, name=ratio_ds.custom_datasource_name, plot_item=ratio_plot_item)
+
+        ratio_track_widget.optionsPanel = ratio_track_widget.getOptionsPanel()
+        ## OUTPUTS: ratio_track_renderer, ratio_track_widget, _root, ratio_plot_item, ratio_dock
 
 
 def apply_adhd_sleep_intrusion_to_timeline(timeline, result_or_legacy: Any, *, t0: Optional[float] = None, eeg_name: Optional[str] = None, eeg_ds: Any = None) -> None:
@@ -415,8 +495,10 @@ def apply_adhd_sleep_intrusion_to_timeline(timeline, result_or_legacy: Any, *, t
         _apply_adhd_sleep_intrusion_to_timeline_impl(timeline, m["out"], t0=float(m.get("t0", 0.0)), eeg_name=m["eeg_name"], eeg_ds=m.get("eeg_ds"))
         return
     if eeg_name is None or eeg_ds is None:
-        print("Theta-delta timeline plot: pass eeg_name= and eeg_ds= keyword arguments, or a legacy dict with out, eeg_name, and eeg_ds.")
-        return
+        err_msg: str = "Theta-delta timeline plot: pass eeg_name= and eeg_ds= keyword arguments, or a legacy dict with out, eeg_name, and eeg_ds."
+        logger.error(err_msg)
+        raise NotImplementedError(err_msg)
+        
     t0_f = 0.0 if t0 is None else float(t0)
     _apply_adhd_sleep_intrusion_to_timeline_impl(timeline, result_or_legacy, t0=t0_f, eeg_name=eeg_name, eeg_ds=eeg_ds)
 
