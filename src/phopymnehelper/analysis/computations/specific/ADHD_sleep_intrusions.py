@@ -402,12 +402,21 @@ def _apply_adhd_sleep_intrusion_to_timeline_impl(timeline, result: Mapping[str, 
     if out is None:
         raise NotImplementedError(f"Run the compute cell first.")
         return
+
+    # motion_name = timeline.motion_track_identifier
+
     if eeg_name is None:
-        raise NotImplementedError(f"Theta-delta timeline plot: missing eeg_name; set ctx.extras['eeg_name'] before run_eeg_computations_graph or pass a legacy adhd_ctx dict with eeg_name.")
-        return
+        eeg_name = timeline.eeg_track_identifier
+        # raise NotImplementedError(f"Theta-delta timeline plot: missing eeg_name; set ctx.extras['eeg_name'] before run_eeg_computations_graph or pass a legacy adhd_ctx dict with eeg_name.")
+        # return
+    assert eeg_name is not None
+
     if eeg_ds is None:
-        raise NotImplementedError(f"Theta-delta timeline plot: missing eeg_ds; set ctx.extras['eeg_ds'] before run_eeg_computations_graph or pass a legacy adhd_ctx dict with eeg_ds.")
-        return
+        eeg_ds = timeline.track_datasources[eeg_name]
+        # raise NotImplementedError(f"Theta-delta timeline plot: missing eeg_ds; set ctx.extras['eeg_ds'] before run_eeg_computations_graph or pass a legacy adhd_ctx dict with eeg_ds.")
+        # return
+    assert eeg_ds is not None
+
     x_abs = t0 + np.asarray(out["times"], dtype=float)
     y = np.asarray(out["theta_delta_ratio"], dtype=float)
     finite = np.isfinite(y)
@@ -425,6 +434,7 @@ def _apply_adhd_sleep_intrusion_to_timeline_impl(timeline, result: Mapping[str, 
     does_already_exist: bool = (analysis_name in timeline.track_renderers)
     
     if draw_on_existing_track:
+        assert eeg_name is not None
         ew, _, _ = timeline.get_track_tuple(eeg_name)
         if ew is None:
             # print("Missing EEG widget for", eeg_name)
@@ -451,6 +461,7 @@ def _apply_adhd_sleep_intrusion_to_timeline_impl(timeline, result: Mapping[str, 
     else:
         logger.info(f"{analysis_name}: does not exist; creating!")
         detailed = pd.DataFrame({"t": x_abs, "theta_delta": y})
+        assert eeg_ds is not None
         ratio_ds = EEGTrackDatasource(intervals_df=eeg_ds.intervals_df.copy(), eeg_df=detailed, custom_datasource_name=analysis_name, max_points_per_second=64.0, enable_downsampling=True, channel_names=["theta_delta"], normalize=False, plot_pen_colors=["#9467bd"], plot_pen_width=0.8,
                                     lab_obj_dict=getattr(eeg_ds, "lab_obj_dict", None), raw_datasets_dict=getattr(eeg_ds, "raw_datasets_dict", None))
         # timeline.TrackRenderingMixin_on_buildUI() ## we don't need this manual call I don't think
