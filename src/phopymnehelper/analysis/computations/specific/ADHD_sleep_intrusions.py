@@ -362,7 +362,7 @@ class ThetaDeltaSleepIntrusionComputation(SpecificComputationBase):
         else:
             eeg_df = None
 
-        logger.debug("\teeg_name=", eeg_name, "motion_name=", motion_name) # , "sfreq=", sfreq, "ch=", len(_ch)
+        logger.info("\teeg_name=", eeg_name, "motion_name=", motion_name) # , "sfreq=", sfreq, "ch=", len(_ch)
 
         adhd_ctx = dict(eeg_name=eeg_name, eeg_ds=eeg_ds, eeg_df=eeg_df, t0=t0_plot, raw=None, out={}) # dict(motion_name=motion_name, motion_df=motion_df_adhd, raw=raw_adhd) 
         # adhd_ctx.update(**{k:v for k, v in dict(motion_name=motion_name, motion_df=motion_df_adhd, raw=raw_adhd).items() if v is not None})
@@ -400,13 +400,13 @@ def _apply_adhd_sleep_intrusion_to_timeline_impl(timeline, result: Mapping[str, 
 
     out = result
     if out is None:
-        print("Run the compute cell first.")
+        raise NotImplementedError(f"Run the compute cell first.")
         return
     if eeg_name is None:
-        print("Theta-delta timeline plot: missing eeg_name; set ctx.extras['eeg_name'] before run_eeg_computations_graph or pass a legacy adhd_ctx dict with eeg_name.")
+        raise NotImplementedError(f"Theta-delta timeline plot: missing eeg_name; set ctx.extras['eeg_name'] before run_eeg_computations_graph or pass a legacy adhd_ctx dict with eeg_name.")
         return
     if eeg_ds is None:
-        print("Theta-delta timeline plot: missing eeg_ds; set ctx.extras['eeg_ds'] before run_eeg_computations_graph or pass a legacy adhd_ctx dict with eeg_ds.")
+        raise NotImplementedError(f"Theta-delta timeline plot: missing eeg_ds; set ctx.extras['eeg_ds'] before run_eeg_computations_graph or pass a legacy adhd_ctx dict with eeg_ds.")
         return
     x_abs = t0 + np.asarray(out["times"], dtype=float)
     y = np.asarray(out["theta_delta_ratio"], dtype=float)
@@ -420,7 +420,7 @@ def _apply_adhd_sleep_intrusion_to_timeline_impl(timeline, result: Mapping[str, 
     y_track_hi = y_track_hi * 1.02
     y_overlay = np.clip(y / ymax, 0.0, 1.0)
 
-    adhd_ctx = dict(eeg_name=eeg_name, motion_name=motion_name, eeg_ds=eeg_ds, eeg_df=eeg_df, t0=t0, raw=raw_adhd, motion_df=motion_df_adhd, out=None)
+    # adhd_ctx = dict(eeg_name=eeg_name, motion_name=motion_name, eeg_ds=eeg_ds, eeg_df=eeg_df, t0=t0, raw=raw_adhd, motion_df=motion_df_adhd, out=None)
     # print("eeg_name=", eeg_name, "motion_name=", motion_name, "sfreq=", sfreq, "ch=", len(_ch))
     does_already_exist: bool = (analysis_name in timeline.track_renderers)
     
