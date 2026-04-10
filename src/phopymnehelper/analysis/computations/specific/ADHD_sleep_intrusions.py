@@ -417,6 +417,12 @@ def _apply_adhd_sleep_intrusion_to_timeline_impl(timeline, result: Mapping[str, 
         # return
     assert eeg_ds is not None
 
+    if (t0 is None) or (t0 < eeg_ds.earliest_unix_timestamp):
+        ## compute 
+        logger.warning(f't0 must be rederived from `eeg_ds.earliest_unix_timestamp`...')
+        t0 = eeg_ds.earliest_unix_timestamp
+        logger.warning(f'\tt0: {t0}')
+
     x_abs = t0 + np.asarray(out["times"], dtype=float)
     y = np.asarray(out["theta_delta_ratio"], dtype=float)
     finite = np.isfinite(y)
@@ -449,14 +455,21 @@ def _apply_adhd_sleep_intrusion_to_timeline_impl(timeline, result: Mapping[str, 
             timeline._adhd_theta_delta_overlay.setData(x=x_abs, y=y_overlay)
 
 
+    ## INPUTS: x_abs, y_overlay
+
     if does_already_exist:
         logger.warn(f"{analysis_name}: already present; overlay updated only.")
-        ratio_track_widget, ratio_track, ratio_ds = timeline.get_track_tuple(analysis_name) ## get existing
-        ratio_plot_item = ratio_track_widget.getRootPlotItem()
-        if ratio_plot_item is not None:
-            ratio_plot_item.setYRange(0, y_track_hi, padding=0.02)
+        ratio_track_widget, ratio_track_renderer, ratio_ds = timeline.get_track_tuple(analysis_name) ## get existing
 
-        return
+        ## trigger an update on the dataframe
+        ratio_ds.detailed_df = pd.DataFrame({"t": x_abs, "theta_delta": y})  # match original columns
+        ratio_ds.source_data_changed_signal.emit()
+
+        # # ratio_plot_item = ratio_track_widget.getRootPlotItem() # getRootPlotItem() is a pyqtgraph PlotItem, not a PlotDataItem. PlotItem has no setData — only curve/image items do. So that path won’t update the series the timeline actually draws.
+        # if ratio_plot_item is not None:
+        #     # ratio_plot_item.setData(x_abs, y_overlay) ## update the data
+        #     ratio_plot_item.setYRange(0, y_track_hi, padding=0.02)
+        #     return
 
     else:
         logger.info(f"{analysis_name}: does not exist; creating!")
