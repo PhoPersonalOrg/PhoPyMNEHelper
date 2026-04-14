@@ -331,12 +331,7 @@ class LabRecorderXDF:
         return f"fallback:{ch_names}|sfreq:{sfreq}"
 
     @classmethod
-    def merge_eeg_streams_by_device(
-        cls,
-        eeg_raws: List[mne.io.BaseRaw],
-        strict_merge: bool = False,
-        debug_print: bool = False,
-    ) -> Tuple[List[mne.io.BaseRaw], List[Dict[str, Any]]]:
+    def merge_eeg_streams_by_device(cls, eeg_raws: List[mne.io.BaseRaw], strict_merge: bool = False, debug_print: bool = False) -> Tuple[List[mne.io.BaseRaw], List[Dict[str, Any]]]:
         """Group EEG raws by device identity and merge segments per device.
 
         `debug_print` is kept for call-site compatibility; merge diagnostics use logging DEBUG on this module.
