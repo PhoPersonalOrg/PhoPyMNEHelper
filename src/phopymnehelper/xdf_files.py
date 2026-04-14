@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from copy import deepcopy
 from typing import Dict, List, Tuple, Optional, Any
 import logging
@@ -14,10 +14,24 @@ from benedict import benedict
 
 from phopylslhelper.general_helpers import unwrap_single_element_listlike_if_needed, readable_dt_str
 from phopylslhelper.easy_time_sync import EasyTimeSyncParsingMixin
+from phopylslhelper.datetime_helpers import float_to_datetime, datetime_to_unix_timestamp
+
 from phopymnehelper.SavedSessionsProcessor import DataModalityType #TODO: move somewhere common
 from phopymnehelper.helpers.dataframe_accessor_helpers import CommonDataFrameAccessorMixin
 
-_log = logging.getLogger(__name__)
+
+logger = logging.getLogger(__name__)
+
+
+modality_channels_dict = {'EEG': ['AF3', 'F7', 'F3', 'FC5', 'T7', 'P7', 'O1', 'O2', 'P8', 'T8', 'FC6', 'F4', 'F8', 'AF4'],
+                        'MOTION': ['AccX', 'AccY', 'AccZ', 'GyroX', 'GyroY', 'GyroZ'],
+                        'GENERIC': ['AF3', 'F7', 'F3', 'FC5', 'T7', 'P7', 'O1', 'O2', 'P8', 'T8', 'FC6', 'F4', 'F8', 'AF4'],
+                        'LOG': ['msg'],
+}
+
+modality_sfreq_dict = {'EEG': 128, 'MOTION': 16,
+                        'GENERIC': 128, 'LOG': -1,
+}
 
 
 def _resolve_stream_first_last_timestamp_sec(stream: dict, stream_info_dict: dict, stream_name: str, n_samples: int, fs: float) -> None:
@@ -51,7 +65,7 @@ def _resolve_stream_first_last_timestamp_sec(stream: dict, stream_info_dict: dic
             stream_info_dict['first_timestamp'] = float(np.min(ts))
         if need_last:
             stream_info_dict['last_timestamp'] = float(np.max(ts))
-        _log.warning('XDF stream "%s": incomplete or missing stream footer; filled first/last from time_stamps where needed', stream_name)
+        logger.warning('XDF stream "%s": incomplete or missing stream footer; filled first/last from time_stamps where needed', stream_name)
         return
     if n_samples > 0 and fs > 0 and stream_info_dict.get('created_at', None) is not None:
         c0 = float(stream_info_dict['created_at'])
@@ -60,9 +74,67 @@ def _resolve_stream_first_last_timestamp_sec(stream: dict, stream_info_dict: dic
             stream_info_dict['first_timestamp'] = c0
         if need_last:
             stream_info_dict['last_timestamp'] = c1
-        _log.warning('XDF stream "%s": missing footer and empty time_stamps; filled first/last from created_at and stream length', stream_name)
+        logger.warning('XDF stream "%s": missing footer and empty time_stamps; filled first/last from created_at and stream length', stream_name)
         return
     raise ValueError(f'XDF stream "{stream_name}": cannot resolve first_timestamp/last_timestamp (no footer, no time_stamps, no heuristic)')
+
+
+def merge_streams_by_name(streams_by_file: List[Tuple[List, Path]]) -> Dict[str, List[Tuple[Dict, Path]]]:
+    """Group streams by name across multiple XDF files.
+
+    Args:
+        streams_by_file: List of tuples (streams_list, file_path) where streams_list is a list of stream dictionaries
+                         from pyxdf and file_path is the Path to the XDF file
+
+    Returns:
+        Dictionary mapping stream names to lists of (stream_dict, file_path) tuples
+    """
+    streams_by_name = {}
+    for streams, file_path in streams_by_file:
+        for stream in streams:
+            stream_name = stream['info']['name'][0]
+            if stream_name not in streams_by_name:
+                streams_by_name[stream_name] = []
+            streams_by_name[stream_name].append((stream, file_path))
+    return streams_by_name
+
+
+
+
+
+# Specific Stream Modality Helpers
+def _is_motion_stream(stream_type: str, stream_name: str) -> bool:
+    return (stream_type.upper() in ['SIGNAL', 'RAW']) and ('Motion' in stream_name)
+
+
+def _is_eeg_quality_stream(stream_type: str, stream_name: str) -> bool:
+    return (stream_type.upper() in ['RAW']) and (' eQuality' in stream_name)
+
+
+def _is_eeg_stream(stream_type: str, stream_name: str) -> bool:
+    return stream_type.upper() == 'EEG'
+
+
+def _is_log_stream(stream_type: str, stream_name: str) -> bool:
+    return (stream_type.upper() in ['MARKERS']) and (stream_name in ['EventBoard', 'TextLogger'])
+
+
+def _get_channel_names_for_stream(stream_type: str, stream_name: str, n_columns: int) -> List[str]:
+    if _is_motion_stream(stream_type, stream_name):
+        return modality_channels_dict['MOTION']
+    if _is_eeg_quality_stream(stream_type, stream_name) or _is_eeg_stream(stream_type, stream_name):
+        return modality_channels_dict['EEG']
+    if _is_log_stream(stream_type, stream_name):
+        return modality_channels_dict['LOG']
+    return [f'Channel_{i}' for i in range(n_columns)]
+
+
+
+
+
+
+
+
 
 
 @pd.api.extensions.register_dataframe_accessor("xdf_streams")
@@ -183,7 +255,7 @@ class XDFDataStreamAccessor(CommonDataFrameAccessorMixin):
                 xdf_stream_infos_df[a_ts_dt_col_name] = xdf_stream_infos_df['recording_datetime'] + xdf_stream_infos_df[a_ts_dt_col_name]
 
             except (ValueError, AttributeError) as e:
-                _log.warning('failed to add column "%s" due to error: %s. Skipping col.', a_ts_dt_col_name, e)
+                logger.warning('failed to add column "%s" due to error: %s. Skipping col.', a_ts_dt_col_name, e)
                 raise
             except Exception as e:
                 raise
@@ -202,7 +274,7 @@ class XDFDataStreamAccessor(CommonDataFrameAccessorMixin):
 
 
         except (ValueError, AttributeError) as e:
-            _log.warning('failed to add column "%s" due to error: %s. Skipping col.', a_ts_dt_col_name, e)
+            logger.warning('failed to add column "%s" due to error: %s. Skipping col.', a_ts_dt_col_name, e)
             raise
         except Exception as e:
             raise
@@ -278,7 +350,7 @@ class XDFDataStreamAccessor(CommonDataFrameAccessorMixin):
 
 
 
-@define(slots=False)
+@define(slots=False, eq=False)
 class LabRecorderXDF:
     """ Loads a `.xdf` file saved by LabRecorder which may contain one or more LSL Streams of differing types
     
@@ -405,7 +477,7 @@ class LabRecorderXDF:
                         f"incompatible EEG segment skipped for device '{device_key}': "
                         f"ch_names/ctypes/sfreq mismatch."
                     )
-                    _log.warning("%s", msg)
+                    logger.warning("%s", msg)
                     if strict_merge:
                         raise ValueError(msg)
                     else:
@@ -420,7 +492,7 @@ class LabRecorderXDF:
             if len(compat_raws) == 1:
                 merged = compat_raws[0]
             else:
-                _log.debug("Merging %s EEG segments for device '%s'", len(compat_raws), device_key)
+                logger.debug("Merging %s EEG segments for device '%s'", len(compat_raws), device_key)
                 # Allow discontinuities; mne will handle time within each segment
                 merged = mne.concatenate_raws(compat_raws, preload=True)
 
@@ -520,7 +592,7 @@ class LabRecorderXDF:
             if a_modality is not None:
                 a_modality = a_modality.value
 
-            _log.debug('======== STREAM "%s":', name)
+            logger.debug('======== STREAM "%s":', name)
 
             fs = float(stream['info']['nominal_srate'][0])
             stream_info_dict: Dict = {'name': name, 'fs': fs}
@@ -528,10 +600,10 @@ class LabRecorderXDF:
             # sample_count: int = stream['footer']['info']['sample_count'][0]
 
             if (len(stream['time_series']) == 0):
-                _log.warning('skipping empty stream: "%s"', name)
+                logger.warning('skipping empty stream: "%s"', name)
                 continue ## skip this stream
             elif (name in self.skipped_stream_names):
-                _log.warning('skipping "%s" with name in skipped_stream_names: %s', name, self.skipped_stream_names)
+                logger.warning('skipping "%s" with name in skipped_stream_names: %s', name, self.skipped_stream_names)
                 continue ## skip this stream
             else:
                 n_samples, n_channels = np.shape(stream['time_series'])
@@ -560,7 +632,7 @@ class LabRecorderXDF:
                         a_ts_value_dt: datetime = self.file_datetime + pd.Timedelta(nanoseconds=a_ts_value)
                         a_dt_key: str = f'{a_key}_dt'
                         stream_info_dict[a_dt_key] = a_ts_value_dt
-                        _log.debug('\t%s: %s', a_dt_key, readable_dt_str(a_ts_value_dt))
+                        logger.debug('\t%s: %s', a_dt_key, readable_dt_str(a_ts_value_dt))
 
                 ## try to get the special marker timestamp helpers:
                 desc_info_dict = dict(stream['info'].get('desc', [{}])[0])
@@ -574,13 +646,13 @@ class LabRecorderXDF:
                 stream_last_timestamp = pd.Timedelta(seconds=float(stream_info_dict['last_timestamp']))
 
                 stream_approx_dur_sec: float = (stream_last_timestamp - stream_first_timestamp).total_seconds()
-                _log.debug('\tstream_approx_dur_sec: %s', stream_approx_dur_sec)
+                logger.debug('\tstream_approx_dur_sec: %s', stream_approx_dur_sec)
 
                 stream_timestamps = np.asarray(stream.get('time_stamps', []), dtype=float).copy()
                 stream_clock_times = np.asarray(stream.get('clock_times', []), dtype=float).copy()
 
-                _log.debug('\tstream_timestamps: %s', stream_timestamps.tolist())
-                _log.debug('\tstream_clock_times: %s', stream_clock_times.tolist())
+                logger.debug('\tstream_timestamps: %s', stream_timestamps.tolist())
+                logger.debug('\tstream_clock_times: %s', stream_clock_times.tolist())
 
                 zeroed_stream_timestamps = deepcopy(stream_timestamps)
                 zeroed_stream_clock_times = deepcopy(stream_clock_times)
@@ -600,8 +672,8 @@ class LabRecorderXDF:
                 ## OUTPUTS: stream_datetimes
 
                 ## post-zeroed:
-                _log.debug('\tpost-zeroed stream_timestamps: %s', stream_timestamps.tolist())
-                _log.debug('\tpost-zeroed stream_clock_times: %s', stream_clock_times.tolist())
+                logger.debug('\tpost-zeroed stream_timestamps: %s', stream_timestamps.tolist())
+                logger.debug('\tpost-zeroed stream_clock_times: %s', stream_clock_times.tolist())
 
                 ## STREAM OUTPUTS: stream_timestamps, stream_clock_times, zeroed_stream_timestamps, zeroed_stream_clock_times, zeroed_stream_timestamps_dt, stream_datetimes
                 # a_raw_df: pd.DataFrame = pd.DataFrame(dict(onset=zeroed_stream_timestamps, onset_dt=zeroed_stream_timestamps_dt, duration=([0.0] * len(zeroed_stream_timestamps_dt)), description=logger_strings))
@@ -683,7 +755,7 @@ class LabRecorderXDF:
                 if a_modality not in self.datasets_dict:
                     self.datasets_dict[a_modality] = []
 
-                _log.debug('======== STREAM "%s":', name)
+                logger.debug('======== STREAM "%s":', name)
 
                 fs = float(stream['info']['nominal_srate'][0])
                 stream_info_dict: Dict = {'name': name, 'fs': fs}
@@ -691,10 +763,10 @@ class LabRecorderXDF:
                 # sample_count: int = stream['footer']['info']['sample_count'][0]
 
                 if (len(stream['time_series']) == 0):
-                    _log.warning('skipping empty stream: "%s"', name)
+                    logger.warning('skipping empty stream: "%s"', name)
                     continue ## skip this stream
                 elif (name in self.skipped_stream_names):
-                    _log.warning('skipping "%s" with name in skipped_stream_names: %s', name, self.skipped_stream_names)
+                    logger.warning('skipping "%s" with name in skipped_stream_names: %s', name, self.skipped_stream_names)
                     continue ## skip this stream
                 else:
                     n_samples, n_channels = np.shape(stream['time_series'])
@@ -723,7 +795,7 @@ class LabRecorderXDF:
                             a_ts_value_dt: datetime = self.file_datetime + pd.Timedelta(nanoseconds=a_ts_value)
                             a_dt_key: str = f'{a_key}_dt'
                             stream_info_dict[a_dt_key] = a_ts_value_dt
-                            _log.debug('\t%s: %s', a_dt_key, readable_dt_str(a_ts_value_dt))
+                            logger.debug('\t%s: %s', a_dt_key, readable_dt_str(a_ts_value_dt))
 
                     ## try to get the special marker timestamp helpers:
                     desc_info_dict = dict(stream['info'].get('desc', [{}])[0])
@@ -737,13 +809,13 @@ class LabRecorderXDF:
                     stream_last_timestamp = pd.Timedelta(seconds=float(stream_info_dict['last_timestamp']))
 
                     stream_approx_dur_sec: float = (stream_last_timestamp - stream_first_timestamp).total_seconds()
-                    _log.debug('\tstream_approx_dur_sec: %s', stream_approx_dur_sec)
+                    logger.debug('\tstream_approx_dur_sec: %s', stream_approx_dur_sec)
 
                     stream_timestamps = np.asarray(stream.get('time_stamps', []), dtype=float).copy()
                     stream_clock_times = np.asarray(stream.get('clock_times', []), dtype=float).copy()
 
-                    _log.debug('\tstream_timestamps: %s', stream_timestamps.tolist())
-                    _log.debug('\tstream_clock_times: %s', stream_clock_times.tolist())
+                    logger.debug('\tstream_timestamps: %s', stream_timestamps.tolist())
+                    logger.debug('\tstream_clock_times: %s', stream_clock_times.tolist())
 
                     zeroed_stream_timestamps = deepcopy(stream_timestamps)
                     zeroed_stream_clock_times = deepcopy(stream_clock_times)
@@ -763,8 +835,8 @@ class LabRecorderXDF:
                     ## OUTPUTS: stream_datetimes
 
                     ## post-zeroed:
-                    _log.debug('\tpost-zeroed stream_timestamps: %s', stream_timestamps.tolist())
-                    _log.debug('\tpost-zeroed stream_clock_times: %s', stream_clock_times.tolist())
+                    logger.debug('\tpost-zeroed stream_timestamps: %s', stream_timestamps.tolist())
+                    logger.debug('\tpost-zeroed stream_clock_times: %s', stream_clock_times.tolist())
 
                     ## STREAM OUTPUTS: stream_timestamps, stream_clock_times, zeroed_stream_timestamps, zeroed_stream_clock_times, zeroed_stream_timestamps_dt, stream_datetimes
                     # a_raw_df: pd.DataFrame = pd.DataFrame(dict(onset=zeroed_stream_timestamps, onset_dt=zeroed_stream_timestamps_dt, duration=([0.0] * len(zeroed_stream_timestamps_dt)), description=logger_strings))
@@ -845,7 +917,7 @@ class LabRecorderXDF:
                             self.datasets_dict[a_modality].append(raw)
 
             except Exception as e:
-                _log.error('stream: %s failed with error: %s. Continuing with the remainder of xdf_streams...', stream, e)
+                logger.error('stream: %s failed with error: %s. Continuing with the remainder of xdf_streams...', stream, e)
                 continue
 
             # raise e
@@ -885,7 +957,7 @@ class LabRecorderXDF:
 
 
     @classmethod
-    def init_from_lab_recorder_xdf_file(cls, a_xdf_file: Path, should_load_full_file_data: bool=True, debug_print: bool=False):
+    def init_from_lab_recorder_xdf_file(cls, a_xdf_file: Path, should_load_full_file_data: bool=True, debug_print: bool=False, skipped_stream_names: Optional[List[str]]=None):
         """
 
             Conclusions: `stream_clock_times` is not really needed if auto-sync is working.
@@ -984,11 +1056,11 @@ class LabRecorderXDF:
                         post-zeroed stream_clock_times: [0.0, 5.0005474500358105, 10.000805050018243, 15.001541150035337, 20.00170895003248, 25.00262110005133, 30.00296305003576, 35.00382990000071]
                     n_unique_xdf_datasets: 1
         """
-
-        skipped_stream_names: List[str] = [
-            # 'TextLogger',
-            'EventBoard',
-        ]
+        if skipped_stream_names is None:
+            skipped_stream_names: List[str] = [
+                # 'TextLogger',
+                'EventBoard',
+            ]
 
         # Load .xdf
         _obj: "LabRecorderXDF" = cls.init_basic_from_lab_recorder_xdf_file(a_xdf_file=a_xdf_file, skipped_stream_names=skipped_stream_names, debug_print=debug_print)
@@ -1043,10 +1115,10 @@ class LabRecorderXDF:
         lab_recorder_xdf_files: List[Path] = list(lab_recorder_output_path.glob('*.xdf'))
         n_total_found_files: int = len(lab_recorder_xdf_files)
         if included_xdf_file_names is not None:
-            _log.info('limiting to included_xdf_file_names: %s...', included_xdf_file_names)
+            logger.info('limiting to included_xdf_file_names: %s...', included_xdf_file_names)
             lab_recorder_xdf_files = [v for v in lab_recorder_xdf_files if v.name in included_xdf_file_names]
             n_filtered_found_files: int = len(lab_recorder_xdf_files)
-            _log.info('\tlimited to %s/%s files', n_filtered_found_files, n_total_found_files)
+            logger.info('\tlimited to %s/%s files', n_filtered_found_files, n_total_found_files)
 
         if not should_load_full_file_data:
             assert (not should_write_final_merged_eeg_fif)
@@ -1063,7 +1135,7 @@ class LabRecorderXDF:
         _out_xdf_stream_infos_df = []
 
         for an_xdf_file_idx, a_xdf_file in enumerate(lab_recorder_xdf_files):
-            _log.info('trying to process XDF file %s/%s: "%s"...', an_xdf_file_idx, len(lab_recorder_xdf_files), a_xdf_file.as_posix())
+            logger.info('trying to process XDF file %s/%s: "%s"...', an_xdf_file_idx, len(lab_recorder_xdf_files), a_xdf_file.as_posix())
             try:
                 _obj = cls.init_from_lab_recorder_xdf_file(a_xdf_file=a_xdf_file, should_load_full_file_data=should_load_full_file_data, debug_print=debug_print)
                 stream_infos = _obj.stream_infos
@@ -1073,7 +1145,7 @@ class LabRecorderXDF:
 
                 eeg_raws = raws_dict.get(DataModalityType.EEG.value, [])
                 if len(eeg_raws) == 0:
-                    _log.warning('no EEG streams found in "%s". Skipping file.', a_xdf_file.as_posix())
+                    logger.warning('no EEG streams found in "%s". Skipping file.', a_xdf_file.as_posix())
                     continue
 
                 # Merge by device so we can handle multiple EEG streams per XDF
@@ -1081,7 +1153,7 @@ class LabRecorderXDF:
                     eeg_raws=eeg_raws, strict_merge=False, debug_print=False
                 )
                 if len(merged_eeg_raws) == 0:
-                    _log.warning('could not produce any merged EEG datasets for "%s". Skipping file.', a_xdf_file.as_posix())
+                    logger.warning('could not produce any merged EEG datasets for "%s". Skipping file.', a_xdf_file.as_posix())
                     continue
 
                 # Optionally write FIF/MAT once per merged dataset
@@ -1118,14 +1190,14 @@ class LabRecorderXDF:
                     _out_xdf_stream_infos_df.append(this_stream_infos)
                 
             except (ValueError, KeyError, AssertionError, TypeError) as e:
-                _log.warning('failed with error: %s\nskipping file.', e)
+                logger.warning('failed with error: %s\nskipping file.', e)
                 if fail_on_exception:
                     raise
                 else:
                     continue
 
             except Exception as e:
-                _log.exception('failed with error: %s\nskipping file.', e)
+                logger.exception('failed with error: %s\nskipping file.', e)
                 raise
                 # continue
         ## END for an_xdf_file_idx, a_x...
@@ -1148,11 +1220,11 @@ class LabRecorderXDF:
         # _out_xdf_stream_infos_df: pd.DataFrame = XDFDataStreamAccessor.init_from_results(_out_xdf_stream_infos_df=_out_xdf_stream_infos_df, active_only_out_eeg_raws=_out_eeg_raw) # [_out_xdf_stream_infos_df['name'] == 'Epoc X']
 
         try:
-            _log.info('trying to finalize _out_xdf_stream_infos_df columns...')
+            logger.info('trying to finalize _out_xdf_stream_infos_df columns...')
             _out_xdf_stream_infos_df: pd.DataFrame = XDFDataStreamAccessor.init_from_results(_out_xdf_stream_infos_df=_out_xdf_stream_infos_df, active_only_out_eeg_raws=_out_eeg_raw) # [_out_xdf_stream_infos_df['name'] == 'Epoc X']
 
         except Exception as e:
-            _log.warning('finalization failed: %s\nYou can call it post-hoc like:\n\t`_out_xdf_stream_infos_df: pd.DataFrame = XDFDataStreamAccessor.init_from_results(_out_xdf_stream_infos_df=_out_xdf_stream_infos_df, active_only_out_eeg_raws=_out_eeg_raw)`\nreturning the non-processed _out_xdf_stream_infos_df.', e)
+            logger.warning('finalization failed: %s\nYou can call it post-hoc like:\n\t`_out_xdf_stream_infos_df: pd.DataFrame = XDFDataStreamAccessor.init_from_results(_out_xdf_stream_infos_df=_out_xdf_stream_infos_df, active_only_out_eeg_raws=_out_eeg_raw)`\nreturning the non-processed _out_xdf_stream_infos_df.', e)
             # raise
             pass
 
@@ -1184,7 +1256,7 @@ class LabRecorderXDF:
         ## per XDF by writing one output per merged EEG dataset.
         eeg_raws = raws_dict.get(DataModalityType.EEG.value, [])
         if len(eeg_raws) == 0:
-            _log.warning('save_post_processed_to_fif found no EEG streams in "%s". Skipping.', a_xdf_file.as_posix())
+            logger.warning('save_post_processed_to_fif found no EEG streams in "%s". Skipping.', a_xdf_file.as_posix())
             return None, None
 
         # Merge streams by device (one Raw per physical device)
@@ -1192,7 +1264,7 @@ class LabRecorderXDF:
             eeg_raws=eeg_raws, strict_merge=False, debug_print=False
         )
         if len(merged_eeg_raws) == 0:
-            _log.warning('save_post_processed_to_fif could not produce any merged EEG datasets for "%s". Skipping.', a_xdf_file.as_posix())
+            logger.warning('save_post_processed_to_fif could not produce any merged EEG datasets for "%s". Skipping.', a_xdf_file.as_posix())
             return None, None
 
         labRecorder_PostProcessed_path.mkdir(exist_ok=True)
@@ -1204,7 +1276,7 @@ class LabRecorderXDF:
         datetime_part = a_lab_recorder_filename_parts[-1] if len(a_lab_recorder_filename_parts) > 0 else ""
         if len(a_lab_recorder_filename_parts) > 2:
             hostname_parts = '_'.join(a_lab_recorder_filename_parts[:-1])
-            _log.debug('hostname_parts: %s will be discarded', hostname_parts)
+            logger.debug('hostname_parts: %s will be discarded', hostname_parts)
 
         export_filepaths_dict = {}
         # For backward compatibility, return the first merged EEG Raw (primary)
@@ -1225,7 +1297,7 @@ class LabRecorderXDF:
                 final_output_filename = base_dt_str
 
             a_lab_recorder_filepath = labRecorder_PostProcessed_path.joinpath(final_output_filename).with_suffix('.fif')
-            _log.info('saving finalized EEG data out to "%s"', a_lab_recorder_filepath.as_posix())
+            logger.info('saving finalized EEG data out to "%s"', a_lab_recorder_filepath.as_posix())
             eeg_raw.save(a_lab_recorder_filepath, overwrite=True)
 
             # Record per-format exports keyed by dataset index
@@ -1333,4 +1405,324 @@ class LabRecorderXDF:
         return file_path
     
 
+    @classmethod
+    def get_reference_datetime_from_xdf_header(cls, file_header: dict) -> Optional[datetime]:
+        """Extract reference datetime from XDF file header.
+        
+        Args:
+            file_header: XDF file header dictionary from pyxdf.load_xdf()
+            
+        Returns:
+            datetime object if found, None otherwise
+            
+        The function checks multiple possible locations in the XDF header:
+        - file_header['info']['recording']['start_time']
+        - file_header['info']['recording']['start_time_s']
+        - file_header['first_timestamp']
+        - Other common locations
 
+        ref_dt = LabRecorderXDF.get_reference_datetime_from_xdf_header(file_header=file_header)
+
+        """
+        if file_header is None:
+            return None
+        
+        # Try various possible locations for recording start time
+        possible_paths = [
+            ['info', 'recording', 'start_time'],
+            ['info', 'recording', 'start_time_s'],
+            ['info', 'recording', 'startTime'],
+            ['first_timestamp'],
+            ['info', 'first_timestamp'],
+            ['recording', 'start_time'],
+        ]
+        
+        for path in possible_paths:
+            try:
+                value = file_header
+                for key in path:
+                    if isinstance(value, dict) and key in value:
+                        value = value[key]
+                        # XDF headers often have values as lists with single element
+                        if isinstance(value, list) and len(value) > 0:
+                            value = value[0]
+                    else:
+                        value = None
+                        break
+                
+                if value is not None:
+                    # Try to parse as datetime
+                    if isinstance(value, (int, float)):
+                        # Unix timestamp (seconds since epoch)
+                        try:
+                            dt = datetime.fromtimestamp(value, tz=timezone.utc)
+                            return dt
+                        except (ValueError, OSError):
+                            # Try as milliseconds if seconds fails
+                            try:
+                                dt = datetime.fromtimestamp(value / 1000.0, tz=timezone.utc)
+                                return dt
+                            except (ValueError, OSError):
+                                logger.warning(f"Could not parse timestamp value {value} as Unix timestamp")
+                                continue
+                    elif isinstance(value, str):
+                        # Try ISO format or other string formats
+                        try:
+                            # Try ISO format first
+                            dt = datetime.fromisoformat(value.replace('Z', '+00:00'))
+                            # Make timezone-aware if naive
+                            if dt.tzinfo is None:
+                                dt = dt.replace(tzinfo=timezone.utc)
+                            return dt
+                        except ValueError:
+                            # Try other common formats
+                            for fmt in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%dT%H:%M:%S.%f']:
+                                try:
+                                    dt = datetime.strptime(value, fmt)
+                                    # Make timezone-aware (assume UTC)
+                                    dt = dt.replace(tzinfo=timezone.utc)
+                                    return dt
+                                except ValueError:
+                                    continue
+                            logger.warning(f"Could not parse datetime string: {value}")
+                            continue
+                    elif isinstance(value, datetime):
+                        # Make timezone-aware if naive
+                        if value.tzinfo is None:
+                            value = value.replace(tzinfo=timezone.utc)
+                        return value
+            except (KeyError, TypeError, AttributeError) as e:
+                continue
+        
+        logger.debug("Could not find recording start time in XDF header")
+        return None
+
+
+
+    @classmethod
+    def perform_process_all_streams_multi_xdf(cls, streams_list: List[List], xdf_file_paths: List[Path], file_headers: Optional[List[Optional[dict]]] = None, **kwargs) -> Tuple[Dict, Dict]:
+        """Process streams from multiple XDF files and **merge streams with the same name**.
+
+        Streams with the same name across different files will be merged into a single datasource.
+        Timestamps are converted to use a common reference datetime (earliest file's reference) to ensure
+        proper alignment across multiple files.
+
+        Args:
+            streams_list: List of stream lists (one per XDF file), where each stream list contains
+                        stream dictionaries from pyxdf
+            xdf_file_paths: List of Path objects corresponding to each stream list
+            file_headers: Optional list of XDF file header dictionaries (one per file)
+
+        Returns:
+            Tuple of (all_streams dict, all_streams_datasources dict) where:
+            - all_streams: Dictionary mapping stream names to merged interval DataFrames
+            - all_streams_datasources: Dictionary mapping stream names to merged TrackDatasource instances
+
+        from phopymnehelper.xdf_files import XDFDataStreamAccessor, LabRecorderXDF
+        from phopymnehelper.xdf_files import _get_channel_names_for_stream, _is_motion_stream, _is_eeg_quality_stream, _is_eeg_stream, _is_log_stream, merge_streams_by_name
+        from phopymnehelper.xdf_files import modality_channels_dict, modality_sfreq_dict
+
+        all_streams, all_streams_detailed_data = LabRecorderXDF.perform_process_all_streams_multi_xdf(streams_list=all_streams_by_file, xdf_file_paths=all_loaded_xdf_file_paths, file_headers=all_file_headers)
+
+
+        """
+        from phopymnehelper.historical_data import HistoricalData
+        # from phopymnehelper.xdf_files import LabRecorderXDF
+
+
+        def _subfn_build_intervals_df(stream_info: Dict, timestamps) -> Tuple[np.ndarray, Optional[pd.DataFrame]]:
+            """ , series_vertical_offset: float = 0.0, color_name: str = 'blue', color_alpha: float = 0.3 """
+            timestamps = np.asarray(timestamps, dtype=float)
+            if len(timestamps) == 0:
+                return timestamps, None
+
+            stream_start = float(timestamps[0])
+            stream_end = float(timestamps[-1])
+            stream_duration = stream_end - stream_start
+            if stream_duration <= 0 and len(timestamps) > 1:
+                diffs = np.diff(timestamps)
+                median_dt = float(np.median(diffs)) if len(diffs) > 0 else 0.0
+                if median_dt > 0:
+                    stream_duration = median_dt * (len(timestamps) - 1)
+                else:
+                    try:
+                        nominal_srate = float(stream_info.get('nominal_srate', [[128.0]])[0][0])
+                        stream_duration = (len(timestamps) - 1) / max(nominal_srate, 1.0)
+                    except (TypeError, KeyError, IndexError, ValueError):
+                        stream_duration = 1.0
+                stream_end = stream_start + stream_duration
+
+            intervals_df = pd.DataFrame({'t_start': [stream_start], 't_duration': [stream_duration], 't_end': [stream_end]})
+            # intervals_df['series_vertical_offset'] = series_vertical_offset
+            # intervals_df['series_height'] = 0.9
+
+            # color = pg.mkColor(color_name)
+            # color.setAlphaF(color_alpha)
+            # intervals_df['pen'] = [pg.mkPen(color, width=1)]
+            # intervals_df['brush'] = [pg.mkBrush(color)]
+            return timestamps, intervals_df
+
+
+        def _subfn_build_detailed_df(stream_info: Dict, stream_type: str, stream_name: str, timestamps: np.ndarray, time_series, strict_validation: bool = False) -> Optional[pd.DataFrame]:
+            if time_series is None or len(time_series) == 0:
+                return None
+            n_channels = int(stream_info['channel_count'][0])
+            n_t_stamps, n_columns = np.shape(time_series)
+            if strict_validation:
+                assert n_channels == n_columns, f"n_channels: {n_channels} != n_columns: {n_columns}"
+                assert len(timestamps) == n_t_stamps, f"len(timestamps): {len(timestamps)} != n_t_stamps: {n_t_stamps}"
+            elif not ((n_channels == n_columns) and (len(timestamps) == n_t_stamps)):
+                return None
+
+            time_series_df = pd.DataFrame(time_series, columns=_get_channel_names_for_stream(stream_type, stream_name, n_columns))
+            time_series_df['t'] = timestamps
+            return time_series_df
+
+
+        def _subfn_process_xdf_file(xdf_path_for_raw: Path):
+            """ 
+                xdf_paths_for_raw = [v[1] for v in stream_file_pairs]
+                raws_dict_dict = {}
+                lab_obj_dict = {}
+                for a_xdf_path in xdf_paths_for_raw:
+                    a_lab_obj, a_raws_dict = _subfn_process_xdf_file(xdf_path_for_raw=a_xdf_path)
+                    lab_obj_dict[a_xdf_path] = a_lap_obj
+                    raws_dict_dict[a_xdf_path] = a_raws_dict
+
+
+            """
+            a_lab_obj = None
+            a_raws_dict = {}
+            logger.info(f'enable_raw_xdf_processing is True so this stream will be processed as MNE raw...')
+            # xdf_path_for_raw = stream_file_pairs[0][1]
+            if not xdf_path_for_raw.exists():
+                return a_lab_obj, None
+            logger.info(f'\ttrying to load raw XDF file load for stream_name: "{stream_name}" with xdf_path: "{xdf_path_for_raw}"...')
+            try:
+                a_lab_obj = cls.init_from_lab_recorder_xdf_file(a_xdf_file=xdf_path_for_raw, should_load_full_file_data=True)
+            except ValueError as e:
+                if 'datetime' in str(e).lower() or 'UTC' in str(e):
+                    logger.warning(f'\tSkipping raw XDF file load for "{stream_name}" with xdf_path: {xdf_path_for_raw}: LabRecorderXDF load failed (UTC/datetime issue): {e}')
+                else:
+                    raise
+            
+            if a_lab_obj is not None:
+                a_raws_dict = a_lab_obj.datasets_dict or {}
+                logger.info(f'\traws_dict: {a_raws_dict}')
+
+            return a_lab_obj, a_raws_dict
+
+        # ==================================================================================================================================================================================================================================================================================== #
+        # BEGIN FUNCTION BODY                                                                                                                                                                                                                                                                  #
+        # ==================================================================================================================================================================================================================================================================================== #
+
+        if len(streams_list) != len(xdf_file_paths):
+            raise ValueError(f"streams_list length ({len(streams_list)}) must match xdf_file_paths length ({len(xdf_file_paths)})")
+
+        # Extract reference datetimes from file headers
+        file_reference_datetimes = {}
+
+        xdf_recording_file_metadata_df: pd.DataFrame = HistoricalData.build_file_comparison_df(recording_files=xdf_file_paths) ## this should be cheap because most will already be cached
+
+        if file_headers is None:
+            file_headers = [None for _ in xdf_file_paths]
+
+        for file_header, file_path in zip(file_headers, xdf_file_paths):
+            ref_dt = None
+            if file_header is not None:
+                ref_dt = cls.get_reference_datetime_from_xdf_header(file_header=file_header)
+            if ref_dt is not None:
+                file_reference_datetimes[file_path] = ref_dt
+            else:
+                resolved_file_path = Path(file_path).resolve()
+                resolved_src_files = [Path(str(src_file)).resolve() == resolved_file_path for src_file in xdf_recording_file_metadata_df['src_file'].tolist()]
+                found_file_df_matches = xdf_recording_file_metadata_df[resolved_src_files]
+                if len(found_file_df_matches) == 1:
+                    meas_datetime = found_file_df_matches.iloc[0]['meas_datetime'] if not found_file_df_matches.empty else None
+                    ref_dt = meas_datetime
+                else:
+                    print(f'WARN: failed to find xdf file metadata for file file_path: "{file_path.as_posix()}" in xdf_recording_file_metadta_df: {xdf_recording_file_metadata_df}\n\tfound_file_df_matches: {found_file_df_matches}')
+
+            if ref_dt is not None:
+                file_reference_datetimes[file_path] = ref_dt
+        ## END for file_header, file_path in zip(file_headers, xdf_file_paths):...
+
+        # Find earliest reference datetime (common reference for all timestamps)
+        earliest_reference_datetime = None
+        if file_reference_datetimes:
+            earliest_reference_datetime = min(file_reference_datetimes.values())
+            print(f"Using earliest reference datetime: {earliest_reference_datetime} for timestamp normalization")
+
+        # Group streams by name across all files
+        streams_by_file = list(zip(streams_list, xdf_file_paths))
+        streams_by_name = merge_streams_by_name(streams_by_file)
+
+        all_streams = {}
+        all_streams_detailed_data = {}
+
+        # Process each unique stream name
+        for stream_name, stream_file_pairs in streams_by_name.items():
+            print(f"\nProcessing stream '{stream_name}' from {len(stream_file_pairs)} file(s)...")
+
+            # Collect intervals and detailed data from all files for this stream name
+            all_intervals_dfs = []
+            all_detailed_dfs = [] ## #TODO 2026-03-02 08:56: - [ ] these detailed_dfs are being built synchronously in the following loop too, PERFORMANCE: defer this to an async call
+            stream_type = None
+            lab_obj_dict: Dict[str, Optional[LabRecorderXDF]] = {}
+
+            for stream, file_path in stream_file_pairs:
+                current_stream_type = stream['info']['type'][0]
+                if stream_type is None:
+                    stream_type = current_stream_type
+                elif stream_type != current_stream_type:
+                    print(f"WARN: Stream '{stream_name}' has different types across files: {stream_type} vs {current_stream_type}")
+
+                timestamps = stream['time_stamps']
+                time_series = stream['time_series']
+
+                if len(timestamps) == 0:
+                    print(f"  Skipping empty stream from {file_path.name}")
+                    continue
+
+                # Convert timestamps: from relative (to file's reference) to absolute, then to relative (to earliest reference)
+                file_ref_dt = file_reference_datetimes.get(file_path)
+                if (file_ref_dt is not None) and (timestamps is not None):
+                    timestamps_absolute = float_to_datetime(timestamps, file_ref_dt)
+                    timestamps = datetime_to_unix_timestamp(timestamps_absolute)
+                else:
+                    timestamps = np.asarray(timestamps, dtype=float)
+                    if file_ref_dt is None:
+                        print(f"  WARN: No reference datetime found for {file_path.name}, timestamps may be misaligned")
+
+                timestamps = np.asarray(timestamps, dtype=float)
+
+                timestamps, intervals_df = _subfn_build_intervals_df(stream['info'], timestamps) # , series_vertical_offset=0.0, color_name='blue', color_alpha=0.3
+                all_intervals_dfs.append(intervals_df)
+
+                # Create *detailed* DataFrame if time_series exists
+                time_series_df = _subfn_build_detailed_df(stream['info'], stream_type, stream_name, timestamps, time_series, strict_validation=False)
+                if time_series_df is not None:
+                    all_detailed_dfs.append(time_series_df)
+            ## END for stream, file_path in stream_file_pairs
+
+
+            # Build the simple intervals _________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________ #
+            # Check if we have valid intervals
+            if not all_intervals_dfs:
+                print(f"  No valid intervals for stream '{stream_name}'")
+                continue
+
+            # Merge intervals for display (all_streams dict)
+            merged_intervals_df = pd.concat(all_intervals_dfs, ignore_index=True).sort_values('t_start')
+            all_streams[stream_name] = merged_intervals_df
+            assert stream_type is not None
+
+            has_valid_intervals = len(merged_intervals_df) > 0
+            has_detailed_data = len(all_detailed_dfs) > 0
+            if has_detailed_data:
+                merged_detailed_df = pd.concat(all_detailed_dfs, ignore_index=True).sort_values('t')
+                all_streams_detailed_data[stream_name] = merged_detailed_df
+
+        ## END for stream_name, stream_file_pairs in streams_by_name.items()
+
+        return all_streams, all_streams_detailed_data
