@@ -22,6 +22,7 @@ dependencies = [
     "python-benedict>=0.28.3,<0.29",
     "phopylslhelper",
     "dill>=0.3.5.1",
+    "pyedflib>=0.1.42",
 ]
 
 [tool.pyrefly]
