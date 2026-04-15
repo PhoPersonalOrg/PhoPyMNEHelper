@@ -119,6 +119,8 @@ def _is_log_stream(stream_type: str, stream_name: str) -> bool:
     return (stream_type.upper() in ['MARKERS']) and (stream_name in ['EventBoard', 'TextLogger'])
 
 
+
+
 def _get_channel_names_for_stream(stream_type: str, stream_name: str, n_columns: int) -> List[str]:
     if _is_motion_stream(stream_type, stream_name):
         return modality_channels_dict['MOTION']
