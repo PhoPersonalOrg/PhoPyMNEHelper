@@ -361,7 +361,7 @@ class LabRecorderXDF:
 
     """
     lab_recorder_to_mne_to_type_dict = {'EEG':'eeg', 'ACC':'eeg', 'GYRO':'eeg', 'RAW': 'eeg'} # 'RAW' for eeg quality
-    stream_name_to_modality_dict = {'Epoc X': DataModalityType.EEG, 'Epoc X Motion':DataModalityType.MOTION, 'Epoc X eQuality':None, 'TextLogger': DataModalityType.PHO_LOG_TO_LSL, 'EventBoard': DataModalityType.PHO_LOG_TO_LSL}
+    stream_name_to_modality_dict = {'Epoc X': DataModalityType.EEG, 'Epoc X Motion':DataModalityType.MOTION, 'Epoc X eQuality': None, 'TextLogger': DataModalityType.PHO_LOG_TO_LSL, 'EventBoard': DataModalityType.PHO_LOG_TO_LSL}
 
 
     xdf_file_path: Path = field()
@@ -927,6 +927,9 @@ class LabRecorderXDF:
         ## END for stream in self.xdf_streams...
 
         stream_infos: pd.DataFrame = pd.DataFrame.from_records(stream_infos)
+        if len(stream_infos) == 0:
+            raise ValueError(f'stream_infos is empty after loading the XDF! No streams found!')
+
 
         if ('stream_start_datetime' in stream_infos):
             stream_infos = stream_infos.sort_values('stream_start_datetime', ascending=True, inplace=False, na_position='last')
@@ -1059,9 +1062,14 @@ class LabRecorderXDF:
                     n_unique_xdf_datasets: 1
         """
         if skipped_stream_names is None:
+            # skipped_stream_names: List[str] = [
+            #     # 'TextLogger',
+            #     'EventBoard',
+            # ]
+
             skipped_stream_names: List[str] = [
                 # 'TextLogger',
-                'EventBoard',
+                # 'EventBoard',
             ]
 
         # Load .xdf
