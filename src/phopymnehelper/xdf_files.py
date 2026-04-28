@@ -116,7 +116,7 @@ def _is_eeg_stream(stream_type: str, stream_name: str) -> bool:
 
 
 def _is_log_stream(stream_type: str, stream_name: str) -> bool:
-    return (stream_type.upper() in ['MARKERS']) and (stream_name in ['EventBoard', 'TextLogger'])
+    return (stream_type.upper() in ['MARKERS']) and (stream_name in ['EventBoard', 'TextLogger', 'SeqDebugText'])
 
 
 
