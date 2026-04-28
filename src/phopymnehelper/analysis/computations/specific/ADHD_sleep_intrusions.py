@@ -221,11 +221,16 @@ def apply_adhd_sleep_intrusion_to_timeline(timeline, result: Mapping[str, Any], 
     if eeg_name is None:
         raise ValueError("apply_adhd_sleep_intrusion_to_timeline requires eeg_name (got None)")
 
-    if t0 is None:
-        t0 = result.get("t0_unix")
+    # if t0 is None:
+    #     t0 = result.get("t0_unix")
     if t0 is None:
         t0 = float(eeg_ds.earliest_unix_timestamp)
         logger.warning(f"{ANALYSIS_TRACK_NAME}: no t0 / result['t0_unix']; falling back to eeg_ds.earliest_unix_timestamp={t0}")
+    if t0 is None:
+        t0 = result.get("t0_unix")
+
+
+    logger.info(f"{ANALYSIS_TRACK_NAME}: t0: {t0}")
 
     x_abs = float(t0) + np.asarray(result["times"], dtype=float)
     y = np.asarray(result["theta_delta_ratio"], dtype=float)
@@ -234,15 +239,16 @@ def apply_adhd_sleep_intrusion_to_timeline(timeline, result: Mapping[str, Any], 
 
     if ANALYSIS_TRACK_NAME in timeline.track_renderers:
         logger.info(f"{ANALYSIS_TRACK_NAME}: refreshing existing track.")
-        _, _, ratio_ds = timeline.get_track_tuple(ANALYSIS_TRACK_NAME)
-        ratio_ds.detailed_df = detailed
-        ratio_ds.source_data_changed_signal.emit()
-        return
+        td_ratio_widget, td_ratio_track, td_ratio_ds = timeline.get_track_tuple(ANALYSIS_TRACK_NAME)
+        td_ratio_ds.detailed_df = detailed
+        td_ratio_ds.source_data_changed_signal.emit()
+        return (td_ratio_widget, td_ratio_track, td_ratio_ds)
 
     logger.info(f"{ANALYSIS_TRACK_NAME}: creating new track (n={len(detailed)}, x_range=[{x_abs.min() if x_abs.size else float('nan')}, {x_abs.max() if x_abs.size else float('nan')}]).")
-    ratio_ds = EEGTrackDatasource(intervals_df=eeg_ds.intervals_df.copy(), eeg_df=detailed, custom_datasource_name=ANALYSIS_TRACK_NAME, max_points_per_second=64.0, enable_downsampling=True, channel_names=["theta_delta"], normalize=True, normalize_over_full_data=True, plot_pen_colors=["#9467bd"], plot_pen_width=1.2, lab_obj_dict=getattr(eeg_ds, "lab_obj_dict", None), raw_datasets_dict=getattr(eeg_ds, "raw_datasets_dict", None))
-    ratio_track_widget, _root, ratio_plot_item, _ratio_dock = timeline.add_new_embedded_pyqtgraph_render_plot_widget(name=ratio_ds.custom_datasource_name, dockSize=(500, 60), dockAddLocationOpts=["bottom"], sync_mode=SynchronizedPlotMode.TO_GLOBAL_DATA)
+    td_ratio_ds = EEGTrackDatasource(intervals_df=eeg_ds.intervals_df.copy(), eeg_df=detailed, custom_datasource_name=ANALYSIS_TRACK_NAME, max_points_per_second=64.0, enable_downsampling=True, channel_names=["theta_delta"], normalize=True, normalize_over_full_data=True, plot_pen_colors=["#9467bd"], plot_pen_width=1.2, lab_obj_dict=getattr(eeg_ds, "lab_obj_dict", None), raw_datasets_dict=getattr(eeg_ds, "raw_datasets_dict", None))
+    td_ratio_widget, _root, ratio_plot_item, _ratio_dock = timeline.add_new_embedded_pyqtgraph_render_plot_widget(name=td_ratio_ds.custom_datasource_name, dockSize=(500, 60), dockAddLocationOpts=["bottom"], sync_mode=SynchronizedPlotMode.TO_GLOBAL_DATA)
 
+    ## Set range to same range as EEG track -- this should be good
     ref_name = eeg_ds.custom_datasource_name
     if ref_name in timeline.ui.matplotlib_view_widgets:
         ref_plot = timeline.ui.matplotlib_view_widgets[ref_name].getRootPlotItem()
@@ -254,9 +260,13 @@ def apply_adhd_sleep_intrusion_to_timeline(timeline, result: Mapping[str, Any], 
     ratio_plot_item.setLabel("left", "theta / delta (norm.)")
     ratio_plot_item.setYRange(0, 1, padding=0.02)
     ratio_plot_item.showAxis("left")
-    timeline.add_track(ratio_ds, name=ratio_ds.custom_datasource_name, plot_item=ratio_plot_item)
-    ratio_track_widget.optionsPanel = ratio_track_widget.getOptionsPanel()
+    timeline.add_track(td_ratio_ds, name=td_ratio_ds.custom_datasource_name, plot_item=ratio_plot_item)
+    td_ratio_widget.optionsPanel = td_ratio_widget.getOptionsPanel()
 
+    ## get the returned values:
+    td_ratio_widget, td_ratio_track, td_ratio_ds = timeline.get_track_tuple(td_ratio_ds.custom_datasource_name)
+    # detailed_td_ratio_df: pd.DataFrame = td_ratio_ds.detailed_df
+    return (td_ratio_widget, td_ratio_track, td_ratio_ds)
 
 __all__ = [
     "ANALYSIS_TRACK_NAME",
