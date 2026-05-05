@@ -937,7 +937,9 @@ class LabRecorderXDF:
             stream_infos['stream_start_datetime_rel_to_earliest'] = (stream_infos['stream_start_datetime'] - earliest_stream_start_datetime) #.dt.total_seconds() #.to_numpy().total_seconds()
         else:
             earliest_stream_start_datetime = None
-            assert (not should_load_full_file_data), f"we need this unless in `(should_load_full_file_data==False)` mode."
+            if should_load_full_file_data:
+                raise ValueError(f'we need the stream start custom metadata unless in `(should_load_full_file_data==False)` mode.')
+            # assert (not should_load_full_file_data), f"we need this unless in `(should_load_full_file_data==False)` mode."
 
         if ('stream_start_lsl_local_offset_seconds' in stream_infos.columns) and (earliest_stream_start_datetime is not None):
             # np.nanmin(stream_infos['stream_start_lsl_local_offset_seconds'])

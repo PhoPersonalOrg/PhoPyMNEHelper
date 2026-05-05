@@ -58,7 +58,7 @@ class SpecificComputationBase(ABC):
             result = self.compute(ctx, params, dep_outputs)
             self.on_computation_complete(result, None, None)
             return result
-        except BaseException as exc:
+        except (BaseException, RuntimeError) as exc:
             self.on_computation_failed(exc)
             raise
 

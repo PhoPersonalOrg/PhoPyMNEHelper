@@ -105,7 +105,7 @@ def compute_theta_delta_sleep_intrusion_series(raw_eeg: mne.io.BaseRaw, *, motio
 
     picks = _good_picks(raw)
     if picks.size == 0:
-        raise RuntimeError(f"No usable channels in raw (n_channels={len(raw.ch_names)}, bads={raw.info.get('bads')})")
+        raise ValueError(f"No usable channels in raw (n_channels={len(raw.ch_names)}, bads={raw.info.get('bads')})")
 
     ar_mask: Optional[np.ndarray] = fit_autoreject_bad_sample_mask(raw, autoreject_epoch_sec=autoreject_epoch_sec, autoreject_kwargs=autoreject_kwargs) if use_autoreject else None
 
