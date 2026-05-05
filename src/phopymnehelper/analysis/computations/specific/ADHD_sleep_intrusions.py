@@ -258,7 +258,7 @@ def apply_adhd_sleep_intrusion_to_timeline(timeline, result: Mapping[str, Any], 
     ratio_plot_item.setTitle("ADHD sleep intrusion series (theta / delta, NaN = motion/QC excluded)")
     ratio_plot_item.setLabel("bottom", "Time (unix s)")
     ratio_plot_item.setLabel("left", "theta / delta (norm.)")
-    ratio_plot_item.setYRange(0, 1, padding=0.02)
+    # ratio_plot_item.setYRange(0, 1, padding=0.0)
     ratio_plot_item.showAxis("left")
     timeline.add_track(td_ratio_ds, name=td_ratio_ds.custom_datasource_name, plot_item=ratio_plot_item)
     td_ratio_widget.optionsPanel = td_ratio_widget.getOptionsPanel()
