@@ -13,7 +13,7 @@ import numpy as np
 from benedict import benedict
 
 from phopylslhelper.general_helpers import unwrap_single_element_listlike_if_needed, readable_dt_str
-from phopylslhelper.easy_time_sync import EasyTimeSyncParsingMixin
+from phopylslhelper.easy_time_sync import EasyTimeSyncParsingMixin, lsl_stream_timestamps_to_unix_seconds
 from phopylslhelper.datetime_helpers import float_to_datetime, datetime_to_unix_timestamp
 
 from phopymnehelper.SavedSessionsProcessor import DataModalityType #TODO: move somewhere common
@@ -1696,15 +1696,12 @@ class LabRecorderXDF:
                     print(f"  Skipping empty stream from {file_path.name}")
                     continue
 
-                # Convert timestamps: from relative (to file's reference) to absolute, then to relative (to earliest reference)
+                # Convert raw LSL local_clock time_stamps to absolute Unix seconds using the per-stream
+                # phopylslhelper sync metadata; falls back to file reference datetime.
                 file_ref_dt = file_reference_datetimes.get(file_path)
-                if (file_ref_dt is not None) and (timestamps is not None):
-                    timestamps_absolute = float_to_datetime(timestamps, file_ref_dt)
-                    timestamps = datetime_to_unix_timestamp(timestamps_absolute)
-                else:
-                    timestamps = np.asarray(timestamps, dtype=float)
-                    if file_ref_dt is None:
-                        print(f"  WARN: No reference datetime found for {file_path.name}, timestamps may be misaligned")
+                timestamps = lsl_stream_timestamps_to_unix_seconds(stream, timestamps, fallback_reference_datetime=file_ref_dt)
+                if file_ref_dt is None:
+                    print(f"  WARN: No reference datetime found for {file_path.name}; relied on per-stream sync metadata if present.")
 
                 timestamps = np.asarray(timestamps, dtype=float)
 
