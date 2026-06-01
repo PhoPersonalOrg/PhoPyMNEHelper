@@ -346,6 +346,29 @@ class MotionData:
             [2*(x*z - y*w),       2*(y*z + x*w),     1 - 2*(x**2 + y**2)]
         ])
 
+
+    @classmethod
+    def quaternion_to_euler_deg(cls, q, sequence: str = 'ZYX', offset_deg: Optional[Tuple[float, float, float]] = None) -> Tuple[float, float, float]:
+        """Convert unit quaternion ``[w, x, y, z]`` to yaw/pitch/roll in degrees.
+
+        For intrinsic ``ZYX``, returns (yaw about Z, pitch about Y, roll about X).
+        ``offset_deg`` adds (yaw, pitch, roll) offsets after conversion for device-frame calibration.
+        """
+        from scipy.spatial.transform import Rotation
+
+        q = np.asarray(q, dtype=float).ravel()
+        if q.size != 4:
+            raise ValueError(f"quaternion must have 4 elements, got {q.size}")
+        w, x, y, z = q
+        rot = Rotation.from_quat([x, y, z, w])
+        z_angle, y_angle, x_angle = rot.as_euler(sequence, degrees=True)
+        yaw, pitch, roll = float(z_angle), float(y_angle), float(x_angle)
+        if offset_deg is not None:
+            yaw += float(offset_deg[0])
+            pitch += float(offset_deg[1])
+            roll += float(offset_deg[2])
+        return yaw, pitch, roll
+
     # ==================================================================================================================================================================================================================================================================================== #
     # Real-time/Dynamic Updating Quaternion Estimation                                                                                                                                                                                                                                     #
     # ==================================================================================================================================================================================================================================================================================== #
