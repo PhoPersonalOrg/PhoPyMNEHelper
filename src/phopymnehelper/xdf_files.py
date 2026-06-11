@@ -919,7 +919,8 @@ class LabRecorderXDF:
                             self.datasets_dict[a_modality].append(raw)
 
             except Exception as e:
-                logger.error('stream: %s failed with error: %s. Continuing with the remainder of xdf_streams...', stream, e)
+                _failed_stream_name = name or (stream.get('info', {}).get('name') or ['<unknown>'])[0]
+                logger.error('stream "%s" failed with error: %s. Continuing with the remainder of xdf_streams...', _failed_stream_name, e)
                 continue
 
             # raise e
