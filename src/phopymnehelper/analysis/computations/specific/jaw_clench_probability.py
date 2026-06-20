@@ -436,14 +436,16 @@ def compute_jaw_clench_state_intervals_from_raw(raws: Sequence[Any], intervals_d
 
 
 def _style_jaw_clench_state_intervals(intervals_df: pd.DataFrame) -> pd.DataFrame:
-    """Apply red overview styling to clinch interval rows."""
+    """Apply dark-red overview styling to clinch interval rows (background for probability line)."""
     import pyqtgraph as pg
 
     out = intervals_df.copy()
-    color = pg.mkColor("#e45756")
-    color.setAlphaF(0.75)
-    pen = pg.mkPen(color, width=1)
-    brush = pg.mkBrush(color)
+    fill_color = pg.mkColor("#2a0707")
+    fill_color.setAlphaF(0.92)
+    border_color = pg.mkColor("#4a1010")
+    border_color.setAlphaF(0.95)
+    pen = pg.mkPen(border_color, width=1)
+    brush = pg.mkBrush(fill_color)
     out["series_vertical_offset"] = 0.0
     out["series_height"] = 1.0
     out["pen"] = [pen] * len(out)
@@ -564,7 +566,7 @@ def apply_jaw_clench_to_timeline(timeline, result: Optional[Mapping[str, Any]] =
         parent_iv, detailed, clench_iv = _historical_jaw_clench_parts_from_result(result, eeg_ds, track_key, t0=t0)
         n_intervals = int(result.get("n_intervals", len(clench_iv)) or 0)
         logger.info("%s: applying jaw-clench track (n_clinch_intervals=%s).", track_key, n_intervals)
-        jaw_ds = JawClenchTrackDatasource(intervals_df=parent_iv, eeg_df=detailed, clench_intervals_df=clench_iv, parent_intervals_df=parent_iv, custom_datasource_name=track_key, max_points_per_second=64.0, enable_downsampling=True, channel_names=[JAW_CLENCH_PROB_COLUMN], normalize=False, fallback_normalization_mode=ChannelNormalizationMode.NONE, plot_pen_colors=["#e45756"], plot_pen_width=1.5, lab_obj_dict=getattr(eeg_ds, "lab_obj_dict", None), raw_datasets_dict=getattr(eeg_ds, "raw_datasets_dict", None))
+        jaw_ds = JawClenchTrackDatasource(intervals_df=parent_iv, eeg_df=detailed, clench_intervals_df=clench_iv, parent_intervals_df=parent_iv, custom_datasource_name=track_key, max_points_per_second=64.0, enable_downsampling=True, channel_names=[JAW_CLENCH_PROB_COLUMN], normalize=False, fallback_normalization_mode=ChannelNormalizationMode.NONE, plot_pen_colors=["#e45756"], plot_pen_width=1.5, plot_pen_alpha=0.5, lab_obj_dict=getattr(eeg_ds, "lab_obj_dict", None), raw_datasets_dict=getattr(eeg_ds, "raw_datasets_dict", None))
 
     return _embed_jaw_clench_track_on_timeline(timeline, jaw_ds, ref_name, dock_size=(500, 60), title="Jaw clench (EEG-derived)", left_label="P(jaw clench)", show_left_axis=True)
 
