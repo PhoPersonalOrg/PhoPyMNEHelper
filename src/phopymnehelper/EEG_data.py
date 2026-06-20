@@ -361,6 +361,7 @@ class EEGComputations:
             a_spectogram_result_dict = a_spectogram_result['spectogram_result_dict'] # Dict[channel: Tuple]
             Sxx = a_spectogram_result['Sxx']
             Sxx_avg = a_spectogram_result['Sxx_avg']
+            percent_valid_t_bins_per_channel = a_spectogram_result['percent_valid_t_bins_per_channel']
             
             for a_ch, a_tuple in a_spectogram_result_dict.items():
                 f, t, Sxx = a_tuple ## unpack the tuple
@@ -398,8 +399,12 @@ class EEGComputations:
         ch_names = [raw.info.ch_names[i] for i in picks]
         Sxx_list = []
         Sxx_avg_list = []
-        
-        spectogram_result_dict = {}
+
+        n_times = int(data.shape[1])
+        n_valid_t_bins_per_channel = np.sum(~np.isnan(data), axis=1)
+        percent_valid_t_bins_per_channel = (n_valid_t_bins_per_channel.astype(float) / float(max(n_times, 1))) * 100.0
+
+        spectogram_result_dict: Dict[str, Tuple] = {}
         for row_idx, a_ch in enumerate(ch_names):
             f, t, Sxx = spectrogram(data[row_idx], fs=fs, nperseg=nperseg, noverlap=noverlap) # #TODO 2025-09-28 13:25: - [ ] Convert to newer `ShortTimeFFT.spectrogram`
             spectogram_result_dict[a_ch] = (f, t, Sxx) ## a tuple
@@ -419,6 +424,7 @@ class EEGComputations:
                     spectogram_result_dict=spectogram_result_dict,
                                         Sxx_avg=Sxx_avg_list,
                                         Sxx=Sxx_list,
+                                        percent_valid_t_bins_per_channel=percent_valid_t_bins_per_channel,
                                         )
 
 
