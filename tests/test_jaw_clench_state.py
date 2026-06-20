@@ -5,8 +5,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from phopymnehelper.analysis.computations.specific.jaw_clench_probability import JAW_CLENCH_PROB_COLUMN
-from phopymnehelper.analysis.computations.specific.jaw_clench_state import compute_jaw_clench_state_intervals_from_prob_df, probability_series_to_clench_intervals
+from phopymnehelper.analysis.computations.specific.jaw_clench_probability import JAW_CLENCH_PROB_COLUMN, compute_jaw_clench_state_intervals_from_prob_df, probability_series_to_clench_intervals
 
 
 def _series_at_hz(values: list, hz: float = 20.0, t0: float = 1000.0) -> tuple[np.ndarray, np.ndarray]:
