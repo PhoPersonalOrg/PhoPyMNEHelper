@@ -45,6 +45,10 @@ JAW_CLENCH_STATE_DEFAULT_MERGE_GAP_S: float = 0.10
 JAW_CLENCH_STATE_DEFAULT_PAD_S: float = 0.05
 JAW_CLENCH_STATE_DEFAULT_ARMED_RELEASE_TIMEOUT_S: float = 30.0
 
+JAW_CLENCH_PROB_LINE_COLOR: str = "#ff4444"
+JAW_CLENCH_PROB_LINE_WIDTH: float = 1.5
+JAW_CLENCH_PROB_LINE_ALPHA: float = 0.5
+
 
 def _interval_row_unix_bounds(iv: pd.Series) -> Tuple[float, float]:
     """Return ``(t_start_unix, t_end_unix)`` for one overview interval row."""
@@ -453,6 +457,10 @@ def _style_jaw_clench_state_intervals(intervals_df: pd.DataFrame) -> pd.DataFram
     return out
 
 
+def _style_jaw_clench_probability_line() -> Dict[str, Any]:
+    """Return plot kwargs for the jaw-clench probability foreground line."""
+    return dict(plot_pen_colors=[JAW_CLENCH_PROB_LINE_COLOR], plot_pen_width=JAW_CLENCH_PROB_LINE_WIDTH, plot_pen_alpha=JAW_CLENCH_PROB_LINE_ALPHA)
+
 def _result_to_detailed_df(result: Mapping[str, Any], eeg_ds: Any, track_key: str, *, t0: Optional[float]) -> pd.DataFrame:
     if result.get("times_are_absolute_unix"):
         x_abs = np.asarray(result["times"], dtype=float)
@@ -566,7 +574,7 @@ def apply_jaw_clench_to_timeline(timeline, result: Optional[Mapping[str, Any]] =
         parent_iv, detailed, clench_iv = _historical_jaw_clench_parts_from_result(result, eeg_ds, track_key, t0=t0)
         n_intervals = int(result.get("n_intervals", len(clench_iv)) or 0)
         logger.info("%s: applying jaw-clench track (n_clinch_intervals=%s).", track_key, n_intervals)
-        jaw_ds = JawClenchTrackDatasource(intervals_df=parent_iv, eeg_df=detailed, clench_intervals_df=clench_iv, parent_intervals_df=parent_iv, custom_datasource_name=track_key, max_points_per_second=64.0, enable_downsampling=True, channel_names=[JAW_CLENCH_PROB_COLUMN], normalize=False, fallback_normalization_mode=ChannelNormalizationMode.NONE, plot_pen_colors=["#e45756"], plot_pen_width=1.5, plot_pen_alpha=0.5, lab_obj_dict=getattr(eeg_ds, "lab_obj_dict", None), raw_datasets_dict=getattr(eeg_ds, "raw_datasets_dict", None))
+        jaw_ds = JawClenchTrackDatasource(intervals_df=parent_iv, eeg_df=detailed, clench_intervals_df=clench_iv, parent_intervals_df=parent_iv, custom_datasource_name=track_key, max_points_per_second=64.0, enable_downsampling=True, channel_names=[JAW_CLENCH_PROB_COLUMN], normalize=False, fallback_normalization_mode=ChannelNormalizationMode.NONE, lab_obj_dict=getattr(eeg_ds, "lab_obj_dict", None), raw_datasets_dict=getattr(eeg_ds, "raw_datasets_dict", None), **_style_jaw_clench_probability_line())
 
     return _embed_jaw_clench_track_on_timeline(timeline, jaw_ds, ref_name, dock_size=(500, 60), title="Jaw clench (EEG-derived)", left_label="P(jaw clench)", show_left_axis=True)
 
