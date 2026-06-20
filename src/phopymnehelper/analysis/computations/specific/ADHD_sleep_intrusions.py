@@ -376,13 +376,16 @@ def apply_adhd_sleep_intrusion_to_timeline(timeline, result: Mapping[str, Any], 
     detailed = pd.DataFrame({"t": x_abs, "theta_delta": y})
     iv_theta = intervals_df_for_theta_delta_track(eeg_ds, result, log_prefix=track_key)
 
-    if track_key in timeline.track_renderers:
+    if track_key in timeline.track_renderers and hasattr(timeline, 'track_is_fully_attached') and timeline.track_is_fully_attached(track_key):
         logger.info("%s: refreshing existing track.", track_key)
         td_ratio_widget, td_ratio_track, td_ratio_ds = timeline.get_track_tuple(track_key)
         td_ratio_ds.intervals_df = iv_theta.copy()
         td_ratio_ds.detailed_df = detailed
         td_ratio_ds.source_data_changed_signal.emit()
         return (td_ratio_widget, td_ratio_track, td_ratio_ds)
+
+    if hasattr(timeline, 'teardown_orphaned_track'):
+        timeline.teardown_orphaned_track(track_key)
 
     logger.info("%s: creating new track (n=%s, x_range=[%s, %s]).", track_key, len(detailed), x_abs.min() if x_abs.size else float("nan"), x_abs.max() if x_abs.size else float("nan"))
     td_ratio_ds = ThetaDeltaSleepIntrusionTrackDatasource(intervals_df=iv_theta, eeg_df=detailed, custom_datasource_name=track_key, max_points_per_second=64.0, enable_downsampling=True, channel_names=["theta_delta"], normalize=True, normalize_over_full_data=True, plot_pen_colors=["#9467bd"], plot_pen_width=1.2, lab_obj_dict=getattr(eeg_ds, "lab_obj_dict", None), raw_datasets_dict=getattr(eeg_ds, "raw_datasets_dict", None))
