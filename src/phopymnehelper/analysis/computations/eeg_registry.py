@@ -13,6 +13,7 @@ from phopymnehelper.analysis.computations.protocol import DEFAULT_REGISTRY, Arti
 from phopymnehelper.analysis.computations.specific.ADHD_sleep_intrusions import ThetaDeltaSleepIntrusionComputation
 from phopymnehelper.analysis.computations.specific.bad_epochs import BadEpochsQCComputation
 from phopymnehelper.analysis.computations.specific.EEG_Spectograms import EEGSpectrogramComputation
+from phopymnehelper.analysis.computations.specific.jaw_clench_probability import JawClenchProbabilityComputation
 
 # xdf_file_name: TypeAlias = str # a name of the xdf file corresponding to a given session
 # EEGComputationId: TypeAlias = Literal["time_independent_bad_channels", "bad_epochs", "raw_data_topo", "cwt", "spectogram"]
@@ -58,6 +59,7 @@ def register_eeg_computation_nodes(registry: ComputationRegistry) -> None:
     _register_node_if_absent(registry, EEGSpectrogramComputation().to_computation_node())
     _register_node_if_absent(registry, BadEpochsQCComputation().to_computation_node())
     _register_node_if_absent(registry, ThetaDeltaSleepIntrusionComputation().to_computation_node())
+    _register_node_if_absent(registry, JawClenchProbabilityComputation().to_computation_node())
 
 
 def session_fingerprint_for_raw_or_path(raw: Any, path: Optional[Path] = None, mtime: Optional[float] = None) -> SessionFingerprint:
@@ -83,7 +85,7 @@ def run_eeg_computations_graph(raw: Any, session: SessionFingerprint, global_par
     if reg is None:
         reg = ensure_default_eeg_registry()
     else:
-        if not reg.has("spectogram") or not reg.has("bad_epochs") or not reg.has("theta_delta_sleep_intrusion"):
+        if not reg.has("spectogram") or not reg.has("bad_epochs") or not reg.has("theta_delta_sleep_intrusion") or not reg.has("jaw_clench_probability"):
             register_eeg_computation_nodes(reg)
     g = tuple(goals) if goals is not None else EEG_COMPUTATION_IDS_ORDERED
     ctx = RunContext(session=session, raw=raw)
