@@ -10,11 +10,10 @@ Public surfaces:
 - :func:`compute_jaw_clench_probability_from_raw` -- one MNE raw segment
 - :func:`compute_jaw_clench_probability_merged_for_intervals` -- multi-raw stitch (absolute unix)
 - :class:`JawClenchProbabilityComputation` -- DAG node for ``run_eeg_computations_graph``
-- :func:`apply_jaw_clench_probability_to_timeline` -- add/refresh the probability track
+- :func:`apply_jaw_clench_to_timeline` -- add/refresh unified jaw-clench track (probability + clinch intervals)
 - :func:`probability_series_to_clench_intervals` -- FSM core (probability → interval rows)
 - :func:`compute_jaw_clench_state_intervals_from_prob_df` -- FSM on ``detailed_df``
 - :func:`compute_jaw_clench_state_intervals_from_raw` -- raw merge + FSM
-- :func:`apply_jaw_clench_state_to_timeline` -- add/refresh the state interval track
 """
 
 from __future__ import annotations
@@ -495,45 +494,60 @@ def _embed_jaw_clench_track_on_timeline(timeline, jaw_ds, ref_name: str, *, dock
     return timeline.get_track_tuple(jaw_ds.custom_datasource_name)
 
 
-def apply_jaw_clench_probability_to_timeline(timeline, result: Optional[Mapping[str, Any]] = None, *, eeg_name: str, eeg_ds: Any, t0: Optional[float] = None) -> Tuple[Any, Any, Any]:
-    """Add or refresh the jaw-clench probability track on ``timeline``.
+def _historical_jaw_clench_parts_from_result(result: Mapping[str, Any], eeg_ds: Any, track_key: str, *, t0: Optional[float]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Return ``(parent_intervals_df, probability_detailed_df, styled_clench_intervals_df)``."""
+    prob_result = result.get("prob_result", result)
+    n_windows = int(prob_result.get("n_windows", 0) or 0)
+    if n_windows <= 0:
+        raise ValueError(f"{track_key}: jaw-clench computation produced no probability windows (check EEG channel picks and interval alignment).")
+    detailed = _result_to_detailed_df(prob_result, eeg_ds, track_key, t0=t0)
+    parent_iv = intervals_df_for_jaw_clench_track(eeg_ds, prob_result, log_prefix=track_key)
+    clench_iv = result.get("intervals_df")
+    if clench_iv is None:
+        clench_iv = compute_jaw_clench_state_intervals_from_prob_df(detailed)["intervals_df"]
+    clench_iv = _style_jaw_clench_state_intervals(clench_iv)
+    return parent_iv, detailed, clench_iv
+
+
+def apply_jaw_clench_to_timeline(timeline, result: Optional[Mapping[str, Any]] = None, *, eeg_name: str, eeg_ds: Any, t0: Optional[float] = None) -> Tuple[Any, Any, Any]:
+    """Add or refresh the unified jaw-clench track (probability line + clinch intervals).
 
     For live LSL EEG (:class:`~pypho_timeline.rendering.datasources.specific.lsl.LiveEEGTrackDatasource`),
     ``result`` may be omitted; a live child datasource recomputes per viewport.
 
-    For historical EEG, pass ``result`` from :func:`compute_jaw_clench_probability_merged_for_intervals`
-    or :func:`compute_jaw_clench_probability_from_raw`.
+    For historical EEG, pass ``result`` from :func:`compute_jaw_clench_state_intervals_from_raw`
+    (preferred) or any dict with ``prob_result`` / probability merge fields plus optional ``intervals_df``.
     """
-    from pypho_timeline.rendering.datasources.specific.eeg import JawClenchProbabilityTrackDatasource, jaw_clench_track_key_for_eeg_datasource
+    from pypho_timeline.rendering.datasources.specific.eeg import JawClenchTrackDatasource, jaw_clench_track_key_for_eeg_datasource
     from pypho_timeline.rendering.helpers.normalization import ChannelNormalizationMode
 
     if eeg_ds is None:
-        raise ValueError("apply_jaw_clench_probability_to_timeline requires eeg_ds (got None)")
+        raise ValueError("apply_jaw_clench_to_timeline requires eeg_ds (got None)")
     if eeg_name is None:
-        raise ValueError("apply_jaw_clench_probability_to_timeline requires eeg_name (got None)")
+        raise ValueError("apply_jaw_clench_to_timeline requires eeg_name (got None)")
 
     track_key = jaw_clench_track_key_for_eeg_datasource(eeg_ds)
     live_mode = False
     try:
-        from pypho_timeline.rendering.datasources.specific.lsl import LiveEEGTrackDatasource, LiveJawClenchProbabilityTrackDatasource
+        from pypho_timeline.rendering.datasources.specific.lsl import LiveEEGTrackDatasource, LiveJawClenchTrackDatasource
         live_mode = isinstance(eeg_ds, LiveEEGTrackDatasource)
     except ImportError:
-        LiveJawClenchProbabilityTrackDatasource = None  # type: ignore[misc, assignment]
+        LiveJawClenchTrackDatasource = None  # type: ignore[misc, assignment]
 
     if track_key in timeline.track_renderers and hasattr(timeline, 'track_is_fully_attached') and timeline.track_is_fully_attached(track_key):
         logger.info("%s: refreshing existing track.", track_key)
         jaw_widget, jaw_track, jaw_ds = timeline.get_track_tuple(track_key)
-        if live_mode and LiveJawClenchProbabilityTrackDatasource is not None:
+        if live_mode and LiveJawClenchTrackDatasource is not None:
             jaw_ds._source_eeg = eeg_ds  # type: ignore[attr-defined]
             if getattr(eeg_ds, "intervals_df", None) is not None:
                 jaw_ds.intervals_df = eeg_ds.intervals_df.copy()
+                jaw_ds._parent_intervals_df = eeg_ds.intervals_df.copy()
         elif result is not None:
-            n_windows = int(result.get("n_windows", 0) or 0)
-            if n_windows <= 0:
-                raise ValueError(f"{track_key}: jaw-clench computation produced no probability windows (check EEG channel picks and interval alignment).")
-            detailed = _result_to_detailed_df(result, eeg_ds, track_key, t0=t0)
-            jaw_ds.intervals_df = intervals_df_for_jaw_clench_track(eeg_ds, result, log_prefix=track_key)
+            parent_iv, detailed, clench_iv = _historical_jaw_clench_parts_from_result(result, eeg_ds, track_key, t0=t0)
+            jaw_ds.intervals_df = parent_iv
+            jaw_ds._parent_intervals_df = parent_iv.copy()
             jaw_ds.detailed_df = detailed
+            jaw_ds.clench_intervals_df = clench_iv
         jaw_ds.source_data_changed_signal.emit()
         return (jaw_widget, jaw_track, jaw_ds)
 
@@ -541,87 +555,18 @@ def apply_jaw_clench_probability_to_timeline(timeline, result: Optional[Mapping[
         timeline.teardown_orphaned_track(track_key)
 
     ref_name = eeg_ds.custom_datasource_name
-    if live_mode and LiveJawClenchProbabilityTrackDatasource is not None:
-        logger.info("%s: creating live jaw-clench probability track.", track_key)
-        jaw_ds = LiveJawClenchProbabilityTrackDatasource(source_eeg=eeg_ds, parent=eeg_ds)
+    if live_mode and LiveJawClenchTrackDatasource is not None:
+        logger.info("%s: creating live jaw-clench track.", track_key)
+        jaw_ds = LiveJawClenchTrackDatasource(source_eeg=eeg_ds, parent=eeg_ds)
     else:
         if result is None:
             raise ValueError(f"{track_key}: historical apply requires result dict")
-        n_windows = int(result.get("n_windows", 0) or 0)
-        if n_windows <= 0:
-            raise ValueError(f"{track_key}: jaw-clench computation produced no probability windows (check EEG channel picks and interval alignment).")
-        detailed = _result_to_detailed_df(result, eeg_ds, track_key, t0=t0)
-        iv_jaw = intervals_df_for_jaw_clench_track(eeg_ds, result, log_prefix=track_key)
-        jaw_ds = JawClenchProbabilityTrackDatasource(intervals_df=iv_jaw, eeg_df=detailed, custom_datasource_name=track_key, max_points_per_second=64.0, enable_downsampling=True, channel_names=[JAW_CLENCH_PROB_COLUMN], normalize=False, fallback_normalization_mode=ChannelNormalizationMode.NONE, plot_pen_colors=["#e45756"], plot_pen_width=1.5, lab_obj_dict=getattr(eeg_ds, "lab_obj_dict", None), raw_datasets_dict=getattr(eeg_ds, "raw_datasets_dict", None))
+        parent_iv, detailed, clench_iv = _historical_jaw_clench_parts_from_result(result, eeg_ds, track_key, t0=t0)
+        n_intervals = int(result.get("n_intervals", len(clench_iv)) or 0)
+        logger.info("%s: applying jaw-clench track (n_clinch_intervals=%s).", track_key, n_intervals)
+        jaw_ds = JawClenchTrackDatasource(intervals_df=parent_iv, eeg_df=detailed, clench_intervals_df=clench_iv, parent_intervals_df=parent_iv, custom_datasource_name=track_key, max_points_per_second=64.0, enable_downsampling=True, channel_names=[JAW_CLENCH_PROB_COLUMN], normalize=False, fallback_normalization_mode=ChannelNormalizationMode.NONE, plot_pen_colors=["#e45756"], plot_pen_width=1.5, lab_obj_dict=getattr(eeg_ds, "lab_obj_dict", None), raw_datasets_dict=getattr(eeg_ds, "raw_datasets_dict", None))
 
-    return _embed_jaw_clench_track_on_timeline(timeline, jaw_ds, ref_name, dock_size=(500, 60), title="Jaw clench probability (EEG-derived EMG proxy)", left_label="P(jaw clench)", show_left_axis=True)
-
-
-def apply_jaw_clench_state_to_timeline(timeline, result: Optional[Mapping[str, Any]] = None, *, eeg_name: str, eeg_ds: Any, prob_detailed_df: Optional[pd.DataFrame] = None) -> Tuple[Any, Any, Any]:
-    """Add or refresh the jaw-clench state interval track on ``timeline``."""
-    from pypho_timeline.rendering.datasources.specific.eeg import JawClenchStateTrackDatasource, jaw_clench_state_track_key_for_eeg_datasource
-
-    if eeg_ds is None:
-        raise ValueError("apply_jaw_clench_state_to_timeline requires eeg_ds (got None)")
-    if eeg_name is None:
-        raise ValueError("apply_jaw_clench_state_to_timeline requires eeg_name (got None)")
-
-    track_key = jaw_clench_state_track_key_for_eeg_datasource(eeg_ds)
-    live_mode = False
-    try:
-        from pypho_timeline.rendering.datasources.specific.lsl import LiveEEGTrackDatasource, LiveJawClenchStateTrackDatasource
-        live_mode = isinstance(eeg_ds, LiveEEGTrackDatasource)
-    except ImportError:
-        LiveJawClenchStateTrackDatasource = None  # type: ignore[misc, assignment]
-
-    ref_name = eeg_ds.custom_datasource_name
-    state_title = "Jaw clench state (EEG-derived intervals)"
-    state_left_label = "Clinch"
-    state_dock_size = (500, 40)
-
-    if live_mode and LiveJawClenchStateTrackDatasource is not None:
-        if track_key in timeline.track_renderers and hasattr(timeline, "track_is_fully_attached") and timeline.track_is_fully_attached(track_key):
-            logger.info("%s: refreshing existing live track.", track_key)
-            jaw_widget, jaw_track, jaw_ds = timeline.get_track_tuple(track_key)
-            jaw_ds._source_eeg = eeg_ds  # type: ignore[attr-defined]
-            if getattr(eeg_ds, "intervals_df", None) is not None:
-                jaw_ds.intervals_df = eeg_ds.intervals_df.copy()
-            jaw_ds.source_data_changed_signal.emit()
-            return (jaw_widget, jaw_track, jaw_ds)
-        if hasattr(timeline, "teardown_orphaned_track"):
-            timeline.teardown_orphaned_track(track_key)
-        logger.info("%s: creating live jaw-clench state track.", track_key)
-        jaw_ds = LiveJawClenchStateTrackDatasource(source_eeg=eeg_ds, parent=eeg_ds, timeline=timeline)
-        return _embed_jaw_clench_track_on_timeline(timeline, jaw_ds, ref_name, dock_size=state_dock_size, title=state_title, left_label=state_left_label, show_left_axis=False)
-
-    if result is None and prob_detailed_df is not None:
-        result = compute_jaw_clench_state_intervals_from_prob_df(prob_detailed_df)
-    if result is None:
-        raise ValueError(f"{track_key}: historical apply requires result dict or prob_detailed_df")
-
-    intervals_df = result.get("intervals_df")
-    if intervals_df is None:
-        raise ValueError(f"{track_key}: result missing intervals_df")
-    intervals_df = _style_jaw_clench_state_intervals(intervals_df)
-    n_intervals = int(result.get("n_intervals", len(intervals_df)) or 0)
-    logger.info("%s: applying jaw-clench state track (n_intervals=%s).", track_key, n_intervals)
-
-    if track_key in timeline.track_renderers and hasattr(timeline, "track_is_fully_attached") and timeline.track_is_fully_attached(track_key):
-        logger.info("%s: refreshing existing track.", track_key)
-        jaw_widget, jaw_track, jaw_ds = timeline.get_track_tuple(track_key)
-        jaw_ds.intervals_df = intervals_df.copy()
-        jaw_ds.source_data_changed_signal.emit()
-        return (jaw_widget, jaw_track, jaw_ds)
-
-    if hasattr(timeline, "teardown_orphaned_track"):
-        timeline.teardown_orphaned_track(track_key)
-
-    prob_result = result.get("prob_result")
-    parent_iv = intervals_df_for_jaw_clench_track(eeg_ds, prob_result, log_prefix=track_key) if prob_result is not None else getattr(eeg_ds, "intervals_df", None)
-    if parent_iv is None or len(parent_iv) == 0:
-        parent_iv = intervals_df.copy()
-    jaw_ds = JawClenchStateTrackDatasource(intervals_df=intervals_df, parent_intervals_df=parent_iv, custom_datasource_name=track_key, enable_downsampling=False, lab_obj_dict=getattr(eeg_ds, "lab_obj_dict", None), raw_datasets_dict=getattr(eeg_ds, "raw_datasets_dict", None))
-    return _embed_jaw_clench_track_on_timeline(timeline, jaw_ds, ref_name, dock_size=state_dock_size, title=state_title, left_label=state_left_label, show_left_axis=False)
+    return _embed_jaw_clench_track_on_timeline(timeline, jaw_ds, ref_name, dock_size=(500, 60), title="Jaw clench (EEG-derived)", left_label="P(jaw clench)", show_left_axis=True)
 
 
 __all__ = [
@@ -636,8 +581,7 @@ __all__ = [
     "JAW_CLENCH_STATE_DEFAULT_QUIET_THRESH",
     "JAW_CLENCH_STATE_DEFAULT_RELEASE_THRESH",
     "JawClenchProbabilityComputation",
-    "apply_jaw_clench_probability_to_timeline",
-    "apply_jaw_clench_state_to_timeline",
+    "apply_jaw_clench_to_timeline",
     "compute_jaw_clench_probability_from_detailed_df",
     "compute_jaw_clench_probability_from_raw",
     "compute_jaw_clench_probability_merged_for_intervals",
