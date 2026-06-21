@@ -48,6 +48,59 @@ JAW_CLENCH_STATE_DEFAULT_ARMED_RELEASE_TIMEOUT_S: float = 30.0
 JAW_CLENCH_PROB_LINE_COLOR: str = "#ff4444"
 JAW_CLENCH_PROB_LINE_WIDTH: float = 1.5
 JAW_CLENCH_PROB_LINE_ALPHA: float = 0.5
+JAW_CLENCH_TRACK_Y_MAX: float = 2.0
+JAW_CLENCH_PROB_Y_MAX: float = 1.0
+
+_JawClenchProbabilityAxisItem: Any = None
+
+
+def _get_jaw_clench_probability_axis_item_class():
+    """Lazy-defined pyqtgraph axis: probability scale 0–1 on the bottom half of the track."""
+    global _JawClenchProbabilityAxisItem
+    if _JawClenchProbabilityAxisItem is not None:
+        return _JawClenchProbabilityAxisItem
+    import pyqtgraph as pg
+    from pyqtgraph.Point import Point
+    from qtpy import QtCore
+
+    class JawClenchProbabilityAxisItem(pg.AxisItem):
+        def __init__(self, *args, prob_y_max: float = JAW_CLENCH_PROB_Y_MAX, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._prob_y_max = float(prob_y_max)
+
+
+        def linkedViewChanged(self, view, newRange=None):
+            self.setRange(0.0, self._prob_y_max)
+
+
+        def generateDrawSpecs(self, p):
+            result = super().generateDrawSpecs(p)
+            if result is None:
+                return None
+            axisSpec, tickSpecs, textSpecs = result
+            bounds = self.mapRectFromParent(self.geometry())
+            if self.orientation not in ("left", "right"):
+                return result
+            top, bottom, mid = bounds.top(), bounds.bottom(), bounds.center().y()
+
+            def _remap_y(y_pix: float) -> float:
+                if bottom == top:
+                    return y_pix
+                frac = (y_pix - top) / (bottom - top)
+                return mid + frac * (bottom - mid)
+
+            if self.orientation == "left":
+                pen, _p1, _p2 = axisSpec
+                axisSpec = (pen, Point(bounds.right(), mid), bounds.bottomRight())
+            else:
+                pen, _p1, _p2 = axisSpec
+                axisSpec = (pen, Point(bounds.left(), mid), bounds.bottomLeft())
+            tickSpecs = [(pen, Point(p1.x(), _remap_y(p1.y())), Point(p2.x(), _remap_y(p2.y()))) for pen, p1, p2 in tickSpecs]
+            textSpecs = [(QtCore.QRectF(rect.x(), _remap_y(rect.center().y()) - rect.height() / 2.0, rect.width(), rect.height()), flags, text) for rect, flags, text in textSpecs]
+            return (axisSpec, tickSpecs, textSpecs)
+
+    _JawClenchProbabilityAxisItem = JawClenchProbabilityAxisItem
+    return _JawClenchProbabilityAxisItem
 
 
 def _interval_row_unix_bounds(iv: pd.Series) -> Tuple[float, float]:
@@ -451,7 +504,7 @@ def _style_jaw_clench_state_intervals(intervals_df: pd.DataFrame) -> pd.DataFram
     pen = pg.mkPen(border_color, width=1)
     brush = pg.mkBrush(fill_color)
     out["series_vertical_offset"] = 0.0
-    out["series_height"] = 1.0
+    out["series_height"] = JAW_CLENCH_TRACK_Y_MAX
     out["pen"] = [pen] * len(out)
     out["brush"] = [brush] * len(out)
     return out
@@ -460,6 +513,26 @@ def _style_jaw_clench_state_intervals(intervals_df: pd.DataFrame) -> pd.DataFram
 def _style_jaw_clench_probability_line() -> Dict[str, Any]:
     """Return plot kwargs for the jaw-clench probability foreground line."""
     return dict(plot_pen_colors=[JAW_CLENCH_PROB_LINE_COLOR], plot_pen_width=JAW_CLENCH_PROB_LINE_WIDTH, plot_pen_alpha=JAW_CLENCH_PROB_LINE_ALPHA)
+
+
+def _apply_jaw_clench_plot_y_range(jaw_plot_item) -> None:
+    """Set Y axis so probability (0–1) occupies the bottom half and intervals span full height."""
+    jaw_plot_item.setYRange(0.0, JAW_CLENCH_TRACK_Y_MAX, padding=0.0)
+
+
+def _apply_jaw_clench_left_axis(jaw_plot_item, *, left_label: Optional[str] = None) -> None:
+    """Show a 0–1 probability axis on the bottom half only (axis bar stops at track midline)."""
+    axis_cls = _get_jaw_clench_probability_axis_item_class()
+    axis = jaw_plot_item.getAxis("left")
+    if not isinstance(axis, axis_cls):
+        new_axis = axis_cls(orientation="left")
+        jaw_plot_item.setAxisItems({"left": new_axis})
+        jaw_plot_item.getAxis("left").linkToView(jaw_plot_item.getViewBox())
+    prob_ticks = [(0.0, "0"), (0.2, "0.2"), (0.4, "0.4"), (0.6, "0.6"), (0.8, "0.8"), (1.0, "1")]
+    jaw_plot_item.getAxis("left").setTicks([prob_ticks])
+    if left_label is not None:
+        jaw_plot_item.setLabel("left", left_label)
+
 
 def _result_to_detailed_df(result: Mapping[str, Any], eeg_ds: Any, track_key: str, *, t0: Optional[float]) -> pd.DataFrame:
     if result.get("times_are_absolute_unix"):
@@ -492,7 +565,8 @@ def _embed_jaw_clench_track_on_timeline(timeline, jaw_ds, ref_name: str, *, dock
     jaw_plot_item.setTitle(title)
     jaw_plot_item.setLabel("bottom", "Time (unix s)")
     jaw_plot_item.setLabel("left", left_label)
-    jaw_plot_item.setYRange(0, 1, padding=0.0)
+    _apply_jaw_clench_plot_y_range(jaw_plot_item)
+    _apply_jaw_clench_left_axis(jaw_plot_item, left_label=left_label)
     if show_left_axis:
         jaw_plot_item.showAxis("left")
     else:
@@ -558,6 +632,10 @@ def apply_jaw_clench_to_timeline(timeline, result: Optional[Mapping[str, Any]] =
             jaw_ds._parent_intervals_df = parent_iv.copy()
             jaw_ds.detailed_df = detailed
             jaw_ds.clench_intervals_df = clench_iv
+        if jaw_widget is not None and hasattr(jaw_widget, "getRootPlotItem"):
+            jaw_plot_item = jaw_widget.getRootPlotItem()
+            _apply_jaw_clench_plot_y_range(jaw_plot_item)
+            _apply_jaw_clench_left_axis(jaw_plot_item, left_label="P(jaw clench)")
         jaw_ds.source_data_changed_signal.emit()
         return (jaw_widget, jaw_track, jaw_ds)
 
@@ -581,6 +659,7 @@ def apply_jaw_clench_to_timeline(timeline, result: Optional[Mapping[str, Any]] =
 
 __all__ = [
     "JAW_CLENCH_PROB_COLUMN",
+    "JAW_CLENCH_TRACK_Y_MAX",
     "JAW_CLENCH_STATE_DEFAULT_ARMED_RELEASE_TIMEOUT_S",
     "JAW_CLENCH_STATE_DEFAULT_MAX_CLINCH_S",
     "JAW_CLENCH_STATE_DEFAULT_MERGE_GAP_S",

@@ -5,7 +5,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from phopymnehelper.analysis.computations.specific.jaw_clench_probability import JAW_CLENCH_PROB_COLUMN, compute_jaw_clench_state_intervals_from_prob_df, probability_series_to_clench_intervals
+from phopymnehelper.analysis.computations.specific.jaw_clench_probability import JAW_CLENCH_PROB_COLUMN, JAW_CLENCH_TRACK_Y_MAX, _style_jaw_clench_state_intervals, compute_jaw_clench_state_intervals_from_prob_df, probability_series_to_clench_intervals
 
 
 def _series_at_hz(values: list, hz: float = 20.0, t0: float = 1000.0) -> tuple[np.ndarray, np.ndarray]:
@@ -57,6 +57,16 @@ class TestJawClenchStateIntervals(unittest.TestCase):
         result = compute_jaw_clench_state_intervals_from_prob_df(df)
         self.assertEqual(int(result["n_intervals"]), 1)
         self.assertIn("intervals_df", result)
+
+    def test_styled_intervals_span_full_track_height(self):
+        try:
+            import pyqtgraph  # noqa: F401
+        except ImportError:
+            self.skipTest("pyqtgraph not available")
+        iv = pd.DataFrame({"t_start": [1000.0], "t_duration": [1.5]})
+        styled = _style_jaw_clench_state_intervals(iv)
+        self.assertEqual(float(styled["series_vertical_offset"].iloc[0]), 0.0)
+        self.assertEqual(float(styled["series_height"].iloc[0]), JAW_CLENCH_TRACK_Y_MAX)
 
 
 if __name__ == "__main__":
