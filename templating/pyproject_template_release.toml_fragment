@@ -3,4 +3,4 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-phopylslhelper = { git = "https://github.com/PhoPersonalOrg/phopylslhelper.git" }
+phopylslhelper = { git = "https://github.com/PhoPersonalOrg/phopylslhelper.git", rev='develop' }
