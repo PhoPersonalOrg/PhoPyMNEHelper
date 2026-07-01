@@ -1,0 +1,3 @@
+[tool.uv.sources]
+mne = { workspace = true }
+phopylslhelper = { workspace = true }

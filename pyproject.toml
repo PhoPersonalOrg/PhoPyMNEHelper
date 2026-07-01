@@ -1,6 +1,6 @@
 [project]
 name = "phopymnehelper"
-version = "0.3.8"
+version = "0.3.9"
 description = "Wrappers for common MNE utilities, such as my personal electrode/head mesh configs"
 readme = "README.md"
 requires-python = ">=3.10,<3.12"
@@ -33,6 +33,8 @@ project-includes = [
 
 [tool.uv.sources]
 phopylslhelper = { path = "../PhoPyLSLhelper", editable = true }
+
+mne = { path = "../../mne-python", editable = true }
 
 [build-system]
 requires = ["hatchling"]
