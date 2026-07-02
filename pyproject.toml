@@ -32,7 +32,7 @@ project-includes = [
 ]
 
 [tool.uv.sources]
-phopylslhelper = { path = "../PhoPyLSLhelper", editable = true }
+phopylslhelper = { git = "https://github.com/CommanderPho/phopylslhelper.git" }
 
 mne = { path = "../../mne-python", editable = true }
 
