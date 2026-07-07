@@ -216,7 +216,7 @@ class FrameMentalStatesComputation(SpecificComputationBase):
         viewport_t_max: Optional[float] = None,
         incremental: bool = True,
     ) -> Dict[str, Any]:
-        """Compute sliding-window mental states from multi-channel EEG samples.
+        """Compute sliding-window mental states from multi-channel EEG samples using Polars and vectorization.
 
         Parameters
         ----------
@@ -231,22 +231,13 @@ class FrameMentalStatesComputation(SpecificComputationBase):
             Optional rolling state (mutated in place). When ``incremental`` and ``state.last_center_t``
             is set, windows at or before that center time are skipped.
         """
+        import polars as pl
+
         data = np.asarray(samples_2d, dtype=np.float64)
         if data.ndim != 2:
             raise ValueError("samples_2d must be 2D (n_channels, n_samples)")
         n_ch, n_samp = data.shape
         sf = float(sfreq)
-        if sf <= 0.0 or n_ch == 0 or n_samp == 0:
-            empty = np.array([], dtype=float)
-            return dict(
-                times=empty,
-                relaxation=empty,
-                focus=empty,
-                stress=empty,
-                drowsiness=empty,
-                state=state or MentalStatesRollingState(),
-                n_windows=0,
-            )
 
         if state is None:
             state = MentalStatesRollingState()
@@ -262,7 +253,8 @@ class FrameMentalStatesComputation(SpecificComputationBase):
 
         w = max(1, int(round(window_sec * sf)))
         s = max(1, int(round(step_sec * sf)))
-        if n_samp < w:
+
+        if sf <= 0.0 or n_ch == 0 or n_samp < w:
             empty = np.array([], dtype=float)
             return dict(
                 times=empty,
@@ -281,70 +273,192 @@ class FrameMentalStatesComputation(SpecificComputationBase):
         else:
             t_arr = np.arange(n_samp, dtype=float) / sf
 
+        # 1. Calculate window start indices
+        starts = np.arange(0, n_samp - w + 1, s)
+        centers = starts + w // 2
+        times = t_arr[centers]
+
+        # Filter incrementally
+        if incremental and state.last_center_t is not None:
+            valid_mask = times > state.last_center_t + 1e-9
+            starts = starts[valid_mask]
+            centers = centers[valid_mask]
+            times = times[valid_mask]
+
+        n_windows = len(starts)
+        if n_windows == 0:
+            empty = np.array([], dtype=float)
+            return dict(
+                times=empty,
+                relaxation=empty,
+                focus=empty,
+                stress=empty,
+                drowsiness=empty,
+                state=state,
+                n_windows=0,
+            )
+
+        start_offset = starts[0]
+
+        # 2. Prefilter
         filter_cache: Dict[Tuple[float, float, float], np.ndarray] = {}
         band_filtered = cls._prefilter_mental_state_bands(data, sf, filter_order, filter_cache)
-        times_out: List[float] = []
-        relaxation_out: List[float] = []
-        focus_out: List[float] = []
-        stress_out: List[float] = []
-        drowsiness_out: List[float] = []
+        if band_filtered is None:
+            empty = np.array([], dtype=float)
+            return dict(times=empty, relaxation=empty, focus=empty, stress=empty, drowsiness=empty, state=state, n_windows=0)
 
-        if band_filtered is not None:
-            win_start = 0
-            while win_start + w <= n_samp:
-                center_idx = win_start + w // 2
-                t_center = float(t_arr[center_idx])
+        # 3. Vectorized variance computation per band
+        db_powers_dict = {}
+        skip_mask = np.zeros(n_windows, dtype=bool)
 
-                if incremental and state.last_center_t is not None and t_center <= state.last_center_t + 1e-9:
-                    win_start += s
-                    continue
+        for band_name in FRAME_MENTAL_STATE_BANDS:
+            filtered = band_filtered[band_name]
 
-                db_powers: Dict[str, float] = {}
-                skip_window = False
-                for band_name in FRAME_MENTAL_STATE_BANDS:
-                    block = band_filtered[band_name][:, win_start : win_start + w]
-                    merged = cls._merged_power_from_filtered_block(block)
-                    if not np.isfinite(merged):
-                        skip_window = True
-                        break
-                    db_powers[band_name] = state._db_normalize_band(band_name, merged)
+            # Slice filtered to align with starts[0]
+            filtered = filtered[:, start_offset:]
 
-                if not skip_window and len(db_powers) == len(FRAME_MENTAL_STATE_BANDS):
-                    ms = state.mental_state_values(db_powers)
-                    times_out.append(t_center)
-                    relaxation_out.append(ms[MENTAL_STATE_RELAXATION])
-                    focus_out.append(ms[MENTAL_STATE_FOCUS])
-                    stress_out.append(ms[MENTAL_STATE_STRESS])
-                    drowsiness_out.append(ms[MENTAL_STATE_DROWSINESS])
-                    state.last_center_t = t_center
+            shape = (n_ch, n_windows, w)
+            strides = (filtered.strides[0], filtered.strides[1] * s, filtered.strides[1])
+            blocks_3d = np.lib.stride_tricks.as_strided(filtered, shape=shape, strides=strides)
 
-                win_start += s
+            # blocks_3d shape: (n_channels, n_windows, window_samples)
+            # Variance along axis=2
+            var = np.nanvar(blocks_3d, axis=2)
+            has_finite = np.any(np.isfinite(var), axis=0)
 
-        times_arr = np.asarray(times_out, dtype=float)
-        if viewport_t_min is not None and viewport_t_max is not None and times_arr.size:
+            mean_var = np.full(n_windows, np.nan)
+            mean_var[has_finite] = np.nanmean(var[:, has_finite], axis=0)
+
+            db_powers_dict[band_name] = mean_var
+            skip_mask |= ~np.isfinite(mean_var)
+
+        # Filter out skipped windows
+        valid_windows = ~skip_mask
+        if not np.any(valid_windows):
+            empty = np.array([], dtype=float)
+            return dict(times=empty, relaxation=empty, focus=empty, stress=empty, drowsiness=empty, state=state, n_windows=0)
+
+        times = times[valid_windows]
+        n_windows = len(times)
+        for band_name in FRAME_MENTAL_STATE_BANDS:
+            db_powers_dict[band_name] = db_powers_dict[band_name][valid_windows]
+
+        # 4. Polars logic for db normalize and mental state
+        initial_mins = {}
+        initial_maxs = {}
+        for band_name in FRAME_MENTAL_STATE_BANDS:
+            if band_name in state.band_db_minmax:
+                initial_mins[band_name] = state.band_db_minmax[band_name][0]
+                initial_maxs[band_name] = state.band_db_minmax[band_name][1]
+            else:
+                initial_mins[band_name] = np.inf
+                initial_maxs[band_name] = -np.inf
+
+        df = pl.DataFrame(db_powers_dict)
+        powers = df.select([pl.col(c).clip(lower_bound=0.0) + 1e-6 for c in df.columns])
+        dbs = powers.select([(10.0 * pl.col(c).log10()).alias(c) for c in df.columns])
+
+        prepend_mins = {c: [initial_mins[c]] for c in dbs.columns}
+        prepend_maxs = {c: [initial_maxs[c]] for c in dbs.columns}
+
+        dbs_mins_prepended = pl.concat([pl.DataFrame(prepend_mins), dbs])
+        dbs_maxs_prepended = pl.concat([pl.DataFrame(prepend_maxs), dbs])
+
+        cum_mins = dbs_mins_prepended.select([pl.col(c).cum_min().alias(c) for c in dbs.columns]).slice(1)
+        cum_maxs = dbs_maxs_prepended.select([pl.col(c).cum_max().alias(c) for c in dbs.columns]).slice(1)
+
+        dbs = dbs.with_columns([
+            cum_mins[c].alias(f"{c}_min") for c in dbs.columns
+        ]).with_columns([
+            cum_maxs[c].alias(f"{c}_max") for c in dbs.columns
+        ])
+
+        norm_exprs = []
+        for c in FRAME_MENTAL_STATE_BANDS:
+            norm_col = pl.when(pl.col(f"{c}_max") > pl.col(f"{c}_min")).then(
+                50.0 + 50.0 * (pl.col(c) - pl.col(f"{c}_min")) / (pl.col(f"{c}_max") - pl.col(f"{c}_min"))
+            ).otherwise(50.0).alias(c)
+            norm_exprs.append(norm_col)
+
+        df_norm = dbs.select(norm_exprs)
+        powers_from_norm = df_norm.select([(10.0 ** (pl.col(c) / 10.0)).alias(c) for c in df_norm.columns])
+
+        alpha = pl.col("Alpha")
+        beta = pl.col("Beta")
+        gamma = pl.col("Gamma")
+        delta = pl.col("Delta")
+        theta = pl.col("Theta")
+
+        log_alpha_beta = (alpha / (beta + 1e-6)).log1p().alias(MENTAL_STATE_RELAXATION)
+        log_beta_theta = (beta / (theta + 1e-6)).log1p().alias(MENTAL_STATE_FOCUS)
+        log_stress = ((beta / (alpha + 1e-6)) * (gamma + 1e-6)).log1p().alias(MENTAL_STATE_STRESS)
+        log_delta_alpha = (delta / (alpha + 1e-6)).log1p().alias(MENTAL_STATE_DROWSINESS)
+
+        df_logs = powers_from_norm.select([log_alpha_beta, log_beta_theta, log_stress, log_delta_alpha])
+
+        rolling_window = state.rolling_norm_window
+        prepends = {
+            MENTAL_STATE_RELAXATION: list(state.alpha_beta_log_ratios),
+            MENTAL_STATE_FOCUS: list(state.beta_theta_focus_ratios),
+            MENTAL_STATE_STRESS: list(state.beta_alpha_stress_ratios),
+            MENTAL_STATE_DROWSINESS: list(state.delta_alpha_drowsiness_ratios)
+        }
+
+        pad_len = len(prepends[MENTAL_STATE_RELAXATION])
+        if pad_len > 0:
+            prepend_df = pl.DataFrame(prepends)
+            df_logs_padded = pl.concat([prepend_df, df_logs])
+        else:
+            df_logs_padded = df_logs
+
+        df_final_padded = df_logs_padded.select([
+            ((pl.col(c) - pl.col(c).rolling_min(window_size=rolling_window, min_samples=1)) /
+            (pl.col(c).rolling_max(window_size=rolling_window, min_samples=1) - pl.col(c).rolling_min(window_size=rolling_window, min_samples=1) + 1e-6) * 100.0).alias(c)
+            for c in df_logs_padded.columns
+        ])
+
+        if pad_len > 0:
+            df_final = df_final_padded.slice(pad_len)
+        else:
+            df_final = df_final_padded
+
+        # Update state
+        last_mins = cum_mins.tail(1).to_dict(as_series=False)
+        last_maxs = cum_maxs.tail(1).to_dict(as_series=False)
+        for c in FRAME_MENTAL_STATE_BANDS:
+            state.band_db_minmax[c] = [last_mins[c][0], last_maxs[c][0]]
+
+        state.alpha_beta_log_ratios.extend(df_logs[MENTAL_STATE_RELAXATION].to_list())
+        state.beta_theta_focus_ratios.extend(df_logs[MENTAL_STATE_FOCUS].to_list())
+        state.beta_alpha_stress_ratios.extend(df_logs[MENTAL_STATE_STRESS].to_list())
+        state.delta_alpha_drowsiness_ratios.extend(df_logs[MENTAL_STATE_DROWSINESS].to_list())
+
+        state.last_center_t = float(times[-1])
+
+        relaxation_out = df_final[MENTAL_STATE_RELAXATION].to_numpy()
+        focus_out = df_final[MENTAL_STATE_FOCUS].to_numpy()
+        stress_out = df_final[MENTAL_STATE_STRESS].to_numpy()
+        drowsiness_out = df_final[MENTAL_STATE_DROWSINESS].to_numpy()
+
+        if viewport_t_min is not None and viewport_t_max is not None and times.size:
             lo, hi = float(viewport_t_min), float(viewport_t_max)
             if lo > hi:
                 lo, hi = hi, lo
-            mask = (times_arr >= lo) & (times_arr <= hi)
-            times_arr = times_arr[mask]
-            relaxation_out = np.asarray(relaxation_out, dtype=float)[mask]
-            focus_out = np.asarray(focus_out, dtype=float)[mask]
-            stress_out = np.asarray(stress_out, dtype=float)[mask]
-            drowsiness_out = np.asarray(drowsiness_out, dtype=float)[mask]
-        else:
-            relaxation_out = np.asarray(relaxation_out, dtype=float)
-            focus_out = np.asarray(focus_out, dtype=float)
-            stress_out = np.asarray(stress_out, dtype=float)
-            drowsiness_out = np.asarray(drowsiness_out, dtype=float)
+            mask = (times >= lo) & (times <= hi)
+            times = times[mask]
+            relaxation_out = relaxation_out[mask]
+            focus_out = focus_out[mask]
+            stress_out = stress_out[mask]
+            drowsiness_out = drowsiness_out[mask]
 
         return dict(
-            times=times_arr,
+            times=times,
             relaxation=relaxation_out,
             focus=focus_out,
             stress=stress_out,
             drowsiness=drowsiness_out,
             state=state,
-            n_windows=int(times_arr.size),
+            n_windows=int(times.size),
         )
 
     @classmethod
