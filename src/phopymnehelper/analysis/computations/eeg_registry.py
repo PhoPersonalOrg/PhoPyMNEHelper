@@ -87,7 +87,7 @@ def run_eeg_computations_graph(raw: Any, session: SessionFingerprint, global_par
     if reg is None:
         reg = ensure_default_eeg_registry()
     else:
-        if not reg.has("spectogram") or not reg.has("bad_epochs") or not reg.has("theta_delta_sleep_intrusion") or not reg.has("jaw_clench_probability"):
+        if not reg.has("spectogram") or not reg.has("bad_epochs") or not reg.has("theta_delta_sleep_intrusion") or (not reg.has("jaw_clench_probability")) or (not reg.has("mental_states")):
             register_eeg_computation_nodes(reg)
     g = tuple(goals) if goals is not None else EEG_COMPUTATION_IDS_ORDERED
     ctx = RunContext(session=session, raw=raw)

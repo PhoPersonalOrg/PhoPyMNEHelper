@@ -8,7 +8,6 @@ import pandas as pd
 from phopymnehelper.analysis.computations.specific.mental_states import (
     MENTAL_STATE_COLUMNS,
     MentalStatesRollingState,
-    _mental_state_values,
     compute_frame_mental_states_from_detailed_df,
     compute_frame_mental_states_series,
 )
@@ -23,7 +22,7 @@ class TestMentalStatesComputation(unittest.TestCase):
     def test_rolling_norm_first_sample_is_zero(self):
         state = MentalStatesRollingState()
         db = {b: 60.0 for b in ("Delta", "Theta", "Alpha", "Beta", "Gamma")}
-        vals = _mental_state_values(db, state)
+        vals = state.mental_state_values(db)
         for c in MENTAL_STATE_COLUMNS:
             self.assertAlmostEqual(vals[c], 0.0, places=5)
 
@@ -33,7 +32,7 @@ class TestMentalStatesComputation(unittest.TestCase):
         for alpha_db in np.linspace(55.0, 75.0, 50):
             db_mut = dict(db)
             db_mut["Alpha"] = alpha_db
-            vals = _mental_state_values(db_mut, state)
+            vals = state.mental_state_values(db_mut)
         for c in MENTAL_STATE_COLUMNS:
             self.assertGreaterEqual(vals[c], 0.0)
             self.assertLessEqual(vals[c], 100.0 + 1e-6)
