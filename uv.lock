@@ -1477,7 +1477,7 @@ wheels = [
 
 [[package]]
 name = "mne"
-source = { editable = "../../mne-python" }
+source = { editable = "../mne-python" }
 dependencies = [
     { name = "decorator" },
     { name = "jinja2" },
@@ -1605,7 +1605,7 @@ requires-dist = [
     { name = "numba", marker = "extra == 'full-no-qt'" },
     { name = "numba", marker = "extra == 'full-pyqt6'" },
     { name = "numba", marker = "extra == 'full-pyside6'" },
-    { name = "numpy", specifier = ">=1.20,<1.24" },
+    { name = "numpy", specifier = ">=1.20" },
     { name = "openmeeg", marker = "extra == 'full'", specifier = ">=2.5.7" },
     { name = "openmeeg", marker = "extra == 'full-no-qt'", specifier = ">=2.5.7" },
     { name = "openmeeg", marker = "extra == 'full-pyqt6'", specifier = ">=2.5.7" },
@@ -2284,7 +2284,7 @@ requires-dist = [
     { name = "gmsh", specifier = ">=4.15.0" },
     { name = "h5py", specifier = ">=3.14.0" },
     { name = "meshio", specifier = ">=5.3.5" },
-    { name = "mne", editable = "../../mne-python" },
+    { name = "mne", editable = "../mne-python" },
     { name = "numpy", specifier = "~=1.20" },
     { name = "pandas", specifier = ">=1.5.3,<3.0.0" },
     { name = "phopylslhelper", editable = "../PhoPyLSLhelper" },
