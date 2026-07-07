@@ -379,8 +379,9 @@ class IOGraphProcessor:
 
     @classmethod
     def master_df_to_intervals_df(cls, master_df: pd.DataFrame) -> pd.DataFrame:
+        present_psychometric_cols = [c for c in cls.all_psychometric_detail_cols if c in master_df.columns]
         if master_df.empty:
-            return pd.DataFrame(columns=["t_start", "t_duration", "session_index", "source_file_names", "parsed_filename_dt_start", "parsed_filename_dt_end"])
+            return pd.DataFrame(columns=["t_start", "t_duration", "session_index", "source_file_names", "parsed_filename_dt_start", "parsed_filename_dt_end", *present_psychometric_cols])
         import polars as pl
         df = pl.from_pandas(master_df)
 
@@ -400,7 +401,8 @@ class IOGraphProcessor:
             .agg(
                 pl.col("parsed_filename_dt_start").min().alias("parsed_filename_dt_start"),
                 pl.col("parsed_filename_dt_end").max().alias("parsed_filename_dt_end"),
-                pl.col("source_file_name").unique().sort().str.join(", ").alias("source_file_names")
+                pl.col("source_file_name").unique().sort().str.join(", ").alias("source_file_names"),
+                *[pl.col(c).max().alias(c) for c in present_psychometric_cols]
             )
             .sort("session_index")
             .with_columns(
@@ -417,10 +419,15 @@ class IOGraphProcessor:
                 "session_index",
                 "source_file_names",
                 "parsed_filename_dt_start",
-                "parsed_filename_dt_end"
+                "parsed_filename_dt_end",
+                *present_psychometric_cols
             )
         )
-        return out.to_pandas()
+        # Ensure proper output type for psychometric columns if any (converting them to float)
+        out_pandas = out.to_pandas()
+        for col in present_psychometric_cols:
+            out_pandas[col] = out_pandas[col].astype(float)
+        return out_pandas
 
 
 __all__ = ["IOGraphProcessor"]
