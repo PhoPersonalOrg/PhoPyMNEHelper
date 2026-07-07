@@ -379,8 +379,9 @@ class IOGraphProcessor:
 
     @classmethod
     def master_df_to_intervals_df(cls, master_df: pd.DataFrame) -> pd.DataFrame:
+        present_psychometric_cols = [c for c in cls.all_psychometric_detail_cols if c in master_df.columns]
         if master_df.empty:
-            return pd.DataFrame(columns=["t_start", "t_duration", "session_index", "source_file_names", "parsed_filename_dt_start", "parsed_filename_dt_end"])
+            return pd.DataFrame(columns=["t_start", "t_duration", "session_index", "source_file_names", "parsed_filename_dt_start", "parsed_filename_dt_end", *present_psychometric_cols])
         grouped = master_df.groupby("session_index", sort=True)
         rows = []
         for session_index, grp in grouped:
@@ -388,16 +389,18 @@ class IOGraphProcessor:
             t_end_dt = pd.to_datetime(grp["parsed_filename_dt_end"].max())
             t_start_unix = float(datetime_to_unix_timestamp(t_start_dt))
             t_end_unix = float(datetime_to_unix_timestamp(t_end_dt))
-            rows.append(
-                {
-                    "t_start": t_start_unix,
-                    "t_duration": float(t_end_unix - t_start_unix),
-                    "session_index": int(session_index),
-                    "source_file_names": ", ".join(sorted(grp["source_file_name"].unique())),
-                    "parsed_filename_dt_start": grp["parsed_filename_dt_start"].min(),
-                    "parsed_filename_dt_end": grp["parsed_filename_dt_end"].max(),
-                }
-            )
+            row = {
+                "t_start": t_start_unix,
+                "t_duration": float(t_end_unix - t_start_unix),
+                "session_index": int(session_index),
+                "source_file_names": ", ".join(sorted(grp["source_file_name"].unique())),
+                "parsed_filename_dt_start": grp["parsed_filename_dt_start"].min(),
+                "parsed_filename_dt_end": grp["parsed_filename_dt_end"].max(),
+            }
+            # Carry through per-session peak values of any psychometric detail columns present.
+            for col in present_psychometric_cols:
+                row[col] = float(grp[col].max())
+            rows.append(row)
         ## END for session_index, grp in grouped...
         return pd.DataFrame(rows)
 
