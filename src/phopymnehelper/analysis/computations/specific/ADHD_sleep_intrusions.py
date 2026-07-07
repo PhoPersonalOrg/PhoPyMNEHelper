@@ -312,7 +312,7 @@ class ThetaDeltaSleepIntrusionComputation(SpecificComputationBase):
         return compute_theta_delta_sleep_intrusion_series(ctx.raw, **dict(params))
 
 
-def apply_adhd_sleep_intrusion_to_timeline(timeline, result: Mapping[str, Any], *, eeg_name: str, eeg_ds: Any, t0: Optional[float] = None) -> Tuple[Any, Any, Any]:
+def apply_adhd_sleep_intrusion_to_timeline(timeline, result: Mapping[str, Any], *, eeg_name: str, eeg_ds: Any, t0: Optional[float] = None, show_left_axis: bool=True, show_bottom_axis: bool=False, show_title_label: bool=False) -> Tuple[Any, Any, Any]:
     """Add or refresh the per-EEG theta/delta track on ``timeline`` from a compute result.
 
     Track name is ``{eeg_ds.custom_datasource_name}_theta_delta`` (see
@@ -398,11 +398,25 @@ def apply_adhd_sleep_intrusion_to_timeline(timeline, result: Mapping[str, Any], 
         x0v, x1v = ref_plot.getViewBox().viewRange()[0]
         ratio_plot_item.setXRange(x0v, x1v, padding=0)
 
-    ratio_plot_item.setTitle("ADHD sleep intrusion series (theta / delta, NaN = motion/QC excluded)")
-    ratio_plot_item.setLabel("bottom", "Time (unix s)")
-    ratio_plot_item.setLabel("left", "theta / delta (norm.)")
+
+    if show_bottom_axis:
+        ratio_plot_item.setLabel("bottom", "Time (unix s)")
+        ratio_plot_item.showAxis("bottom")
+    else:
+        ratio_plot_item.hideAxis("bottom")
+
+    if show_title_label:
+        ratio_plot_item.setTitle("ADHD sleep intrusion series (theta / delta, NaN = motion/QC excluded)")
+    else:
+        ratio_plot_item.setTitle(None)
+
+    if show_left_axis:
+        ratio_plot_item.setLabel("left", "theta / delta (norm.)")
+        ratio_plot_item.showAxis("left")
+    else:
+        ratio_plot_item.hideAxis("left")
+    
     # ratio_plot_item.setYRange(0, 1, padding=0.0)
-    ratio_plot_item.showAxis("left")
     timeline.add_track(td_ratio_ds, name=td_ratio_ds.custom_datasource_name, plot_item=ratio_plot_item)
     td_ratio_widget.optionsPanel = td_ratio_widget.getOptionsPanel()
 

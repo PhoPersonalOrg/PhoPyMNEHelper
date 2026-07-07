@@ -554,7 +554,7 @@ def _result_to_detailed_df(result: Mapping[str, Any], eeg_ds: Any, track_key: st
     return pd.DataFrame({"t": x_abs, JAW_CLENCH_PROB_COLUMN: y})
 
 
-def _embed_jaw_clench_track_on_timeline(timeline, jaw_ds, ref_name: str, *, dock_size: Tuple[int, int], title: str, left_label: str, show_left_axis: bool) -> Tuple[Any, Any, Any]:
+def _embed_jaw_clench_track_on_timeline(timeline, jaw_ds, ref_name: str, *, dock_size: Tuple[int, int], title: str, left_label: str, show_left_axis: bool=True, show_bottom_axis: bool=False, show_title_label: bool=False) -> Tuple[Any, Any, Any]:
     from pypho_timeline.core.synchronized_plot_mode import SynchronizedPlotMode
 
     jaw_widget, _root, jaw_plot_item, _jaw_dock = timeline.add_new_embedded_pyqtgraph_render_plot_widget(name=jaw_ds.custom_datasource_name, dockSize=dock_size, dockAddLocationOpts=["bottom"], sync_mode=SynchronizedPlotMode.TO_GLOBAL_DATA)
@@ -562,8 +562,17 @@ def _embed_jaw_clench_track_on_timeline(timeline, jaw_ds, ref_name: str, *, dock
         ref_plot = timeline.ui.matplotlib_view_widgets[ref_name].getRootPlotItem()
         x0v, x1v = ref_plot.getViewBox().viewRange()[0]
         jaw_plot_item.setXRange(x0v, x1v, padding=0)
-    jaw_plot_item.setTitle(title)
-    jaw_plot_item.setLabel("bottom", "Time (unix s)")
+    if show_bottom_axis:
+        jaw_plot_item.setLabel("bottom", "Time (unix s)")
+        jaw_plot_item.showAxis("bottom")
+    else:
+        jaw_plot_item.hideAxis("bottom")
+
+    if show_title_label:
+        jaw_plot_item.setTitle(title)
+    else:
+        jaw_plot_item.setTitle(None)
+
     jaw_plot_item.setLabel("left", left_label)
     _apply_jaw_clench_plot_y_range(jaw_plot_item)
     _apply_jaw_clench_left_axis(jaw_plot_item, left_label=left_label)
@@ -571,6 +580,7 @@ def _embed_jaw_clench_track_on_timeline(timeline, jaw_ds, ref_name: str, *, dock
         jaw_plot_item.showAxis("left")
     else:
         jaw_plot_item.hideAxis("left")
+
     timeline.add_track(jaw_ds, name=jaw_ds.custom_datasource_name, plot_item=jaw_plot_item)
     jaw_widget.optionsPanel = jaw_widget.getOptionsPanel()
     if hasattr(_jaw_dock, "updateWidgetsHaveOptionsPanel"):
