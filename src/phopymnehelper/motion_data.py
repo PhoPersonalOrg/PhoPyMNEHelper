@@ -119,6 +119,13 @@ class MotionData:
 
 
     @classmethod
+    def _vectorized_minmax_normalize(cls, arr: np.ndarray, curr_global_min: float, curr_global_max: float) -> np.ndarray:
+        """Vectorized equivalent of per-scalar _build_active_norm_fn normalization."""
+        if (curr_global_min == np.nan) or (curr_global_max == np.nan):
+            return np.abs(arr)
+        return (np.abs(arr) - curr_global_min) / (curr_global_max - curr_global_min)
+
+    @classmethod
     def compute_rolling_motion_change_detection(cls, a_df: pd.DataFrame, enable_global_normalization:bool=True, total_change_threshold: float=0.5, average_method = np.mean) -> pd.DataFrame:
         """ 
 
@@ -131,86 +138,97 @@ class MotionData:
 
         
         """
-        # active_norm_fn = (lambda x: (x - curr_total_col_global_min)/(curr_total_col_global_max - curr_total_col_global_min))
-        def _build_active_norm_fn(curr_global_min: float, curr_global_max: float):
-            if (curr_global_min == np.nan) or (curr_global_max == np.nan):
-                active_norm_fn = (lambda x: np.abs(x))
-            else:
-                active_norm_fn = (lambda x: (np.abs(x) - curr_global_min)/(curr_global_max - curr_global_min)) ## normalize column between [0.0, +1.0]
-                # active_norm_fn = (lambda x: (2.0*(x - curr_global_min)/(curr_global_max - curr_global_min)) - 1.0) ## normalize column between [-1.0, +1.0]
-            return active_norm_fn
-        
         col_names = ['AccX', 'AccY', 'AccZ']
         smoothed_col_names = [f'{k}_smooth' for k in col_names]
         diff_col_names = [f'{k}_diff' for k in col_names]
-        # global_max_min_dict = {'AccX': (0.0, 1.0), 'AccY': (0.0, 1.0), 'AccZ': (0.0, 1.0)}
         global_max_min_dict = {}
 
+        accel = a_df[col_names].to_numpy(dtype=float)
+        n_rows = len(a_df)
 
-        # _temp_df[smoothed_col_names] = np.zeros_like(_temp_df['AccX'].values()) ## initialize to np.NaN
-        # _temp_df[diff_col_names] = np.zeros_like(_temp_df['AccX'].values())
-
-        for a_col_name, a_smoothed_col_name, a_diff_col_name in zip(col_names, smoothed_col_names, diff_col_names):
+        for col_idx, (a_col_name, a_smoothed_col_name, a_diff_col_name) in enumerate(
+            zip(col_names, smoothed_col_names, diff_col_names)
+        ):
+            col_values = accel[:, col_idx]
             if enable_global_normalization:
+                col_min = np.nanmin(col_values)
+                col_max = np.nanmax(col_values)
                 if a_col_name not in global_max_min_dict:
-                    global_max_min_dict[a_col_name] = (a_df[a_col_name].min(skipna=True), a_df[a_col_name].max(skipna=True))
+                    global_max_min_dict[a_col_name] = (col_min, col_max)
                 else:
-                    global_max_min_dict[a_col_name] = (min(global_max_min_dict[a_col_name][0], a_df[a_col_name].min(skipna=True)), max(global_max_min_dict[a_col_name][1], a_df[a_col_name].max(skipna=True)))
+                    global_max_min_dict[a_col_name] = (
+                        min(global_max_min_dict[a_col_name][0], col_min),
+                        max(global_max_min_dict[a_col_name][1], col_max),
+                    )
 
-            a_df[a_smoothed_col_name] = (a_df[a_col_name] ** 2).apply(average_method)
-            if enable_global_normalization:
-                if a_smoothed_col_name not in global_max_min_dict:
-                    global_max_min_dict[a_smoothed_col_name] = (a_df[a_smoothed_col_name].min(skipna=True), a_df[a_smoothed_col_name].max(skipna=True))
-                else:
-                    global_max_min_dict[a_smoothed_col_name] = (min(global_max_min_dict[a_smoothed_col_name][0], a_df[a_smoothed_col_name].min(skipna=True)), max(global_max_min_dict[a_smoothed_col_name][1], a_df[a_smoothed_col_name].max(skipna=True)))
-
-                ## normalize column between [-1.0, +1.0]
-                # a_df[active_accel_col_names] = a_df[active_accel_col_names].apply(lambda x: 2*(x - x.min())/(x.max() - x.min()) - 1)
-                curr_smoothed_col_global_min, curr_smoothed_col_global_max = global_max_min_dict[a_smoothed_col_name]
-                # _temp_df[a_smoothed_col_name] = _temp_df[a_smoothed_col_name].apply(lambda x: 2*(x - x.min())/(x.max() - x.min()) - 1)
-                a_df[a_smoothed_col_name] = a_df[a_smoothed_col_name].apply(_build_active_norm_fn(curr_global_min=curr_smoothed_col_global_min, curr_global_max=curr_smoothed_col_global_max))                
-                # if (curr_smoothed_col_global_min != np.nan) and (curr_smoothed_col_global_max != np.nan):
-                #     # _temp_df[a_smoothed_col_name] = _temp_df[a_smoothed_col_name].apply(lambda x: (2*(x - curr_smoothed_col_global_min)/(curr_smoothed_col_global_max - curr_smoothed_col_global_min) - 1)).abs()
-                #     a_df[a_smoothed_col_name] = a_df[a_smoothed_col_name].apply(lambda x: (x - curr_smoothed_col_global_min)/(curr_smoothed_col_global_max - curr_smoothed_col_global_min)).abs() ## normalize column between [0.0, +1.0]
-
-
-            a_df[a_diff_col_name] = a_df[a_smoothed_col_name].diff().abs()
-            if enable_global_normalization:
-                if a_diff_col_name not in global_max_min_dict:
-                    global_max_min_dict[a_diff_col_name] = (a_df[a_diff_col_name].min(skipna=True), a_df[a_diff_col_name].max(skipna=True))
-                else:
-                    global_max_min_dict[a_diff_col_name] = (min(global_max_min_dict[a_diff_col_name][0], a_df[a_diff_col_name].min(skipna=True)), max(global_max_min_dict[a_diff_col_name][1], a_df[a_diff_col_name].max(skipna=True)))
-
-                ## normalize column between [0.0, +1.0]
-                curr_diff_col_global_min, curr_diff_col_global_max = global_max_min_dict[a_diff_col_name]
-                a_df[a_diff_col_name] = a_df[a_diff_col_name].apply(_build_active_norm_fn(curr_global_min=curr_diff_col_global_min, curr_global_max=curr_diff_col_global_max))
-                # if (curr_diff_col_global_min != np.nan) and (curr_diff_col_global_max != np.nan):
-                    # a_df[a_diff_col_name] = a_df[a_diff_col_name].apply(lambda x: (x - curr_diff_col_global_min)/(curr_diff_col_global_max - curr_diff_col_global_min)).abs()
-                    
-                    
-                    
-        ## END for a_col_name, a_smoothed_col_name in zip(se...
-        
-        a_df['total'] = a_df[diff_col_names].max(axis='columns', skipna=True)
-        if enable_global_normalization:
-            if 'total' not in global_max_min_dict:
-                global_max_min_dict['total'] = (a_df['total'].min(skipna=True), a_df['total'].max(skipna=True))
+            # Historical behavior: .apply(average_method) on scalars is a no-op for np.mean (square only).
+            squared = col_values ** 2
+            if average_method is np.mean:
+                smoothed = squared.astype(float, copy=False)
             else:
-                global_max_min_dict['total'] = (min(global_max_min_dict['total'][0], a_df['total'].min(skipna=True)), max(global_max_min_dict['total'][1], a_df['total'].max(skipna=True)))
-            ## normalize column between [-1.0, +1.0]
-            # a_df[active_accel_col_names] = a_df[active_accel_col_names].apply(lambda x: 2*(x - x.min())/(x.max() - x.min()) - 1)
-            curr_total_col_global_min, curr_total_col_global_max = global_max_min_dict['total']
-            # _temp_df[a_smoothed_col_name] = _temp_df[a_smoothed_col_name].apply(lambda x: 2*(x - x.min())/(x.max() - x.min()) - 1)
-            a_df['total'] = a_df['total'].apply(_build_active_norm_fn(curr_global_min=curr_total_col_global_min, curr_global_max=curr_total_col_global_max))
+                smoothed = np.array([average_method(x) for x in squared], dtype=float)
+            if enable_global_normalization:
+                smoothed_min = np.nanmin(smoothed)
+                smoothed_max = np.nanmax(smoothed)
+                if a_smoothed_col_name not in global_max_min_dict:
+                    global_max_min_dict[a_smoothed_col_name] = (smoothed_min, smoothed_max)
+                else:
+                    global_max_min_dict[a_smoothed_col_name] = (
+                        min(global_max_min_dict[a_smoothed_col_name][0], smoothed_min),
+                        max(global_max_min_dict[a_smoothed_col_name][1], smoothed_max),
+                    )
+                curr_smoothed_col_global_min, curr_smoothed_col_global_max = global_max_min_dict[a_smoothed_col_name]
+                smoothed = cls._vectorized_minmax_normalize(
+                    smoothed,
+                    curr_global_min=curr_smoothed_col_global_min,
+                    curr_global_max=curr_smoothed_col_global_max,
+                )
 
-            # if (curr_total_col_global_min != np.nan) and (curr_total_col_global_max != np.nan):
-                # _temp_df['total'] = _temp_df['total'].apply(lambda x: 2*(x - curr_total_col_global_min)/(curr_total_col_global_max - curr_total_col_global_min) - 1) ## normalize column between [-1.0, +1.0]
-                # a_df['total'] = a_df['total'].apply(lambda x: (x - curr_total_col_global_min)/(curr_total_col_global_max - curr_total_col_global_min)).abs() ## normalize column between [0.0, +1.0]
-                
-        # _temp_df = _temp_df.dropna(axis='index', how='any', subset=['total'])
+            diff = np.full(n_rows, np.nan, dtype=float)
+            if n_rows > 1:
+                diff[1:] = np.abs(np.diff(smoothed))
+            if enable_global_normalization:
+                diff_min = np.nanmin(diff)
+                diff_max = np.nanmax(diff)
+                if a_diff_col_name not in global_max_min_dict:
+                    global_max_min_dict[a_diff_col_name] = (diff_min, diff_max)
+                else:
+                    global_max_min_dict[a_diff_col_name] = (
+                        min(global_max_min_dict[a_diff_col_name][0], diff_min),
+                        max(global_max_min_dict[a_diff_col_name][1], diff_max),
+                    )
+                curr_diff_col_global_min, curr_diff_col_global_max = global_max_min_dict[a_diff_col_name]
+                diff = cls._vectorized_minmax_normalize(
+                    diff,
+                    curr_global_min=curr_diff_col_global_min,
+                    curr_global_max=curr_diff_col_global_max,
+                )
+
+            a_df[a_smoothed_col_name] = smoothed
+            a_df[a_diff_col_name] = diff
+
+        diff_matrix = a_df[diff_col_names].to_numpy(dtype=float)
+        total = np.nanmax(diff_matrix, axis=1)
+        if enable_global_normalization:
+            total_min = np.nanmin(total)
+            total_max = np.nanmax(total)
+            if 'total' not in global_max_min_dict:
+                global_max_min_dict['total'] = (total_min, total_max)
+            else:
+                global_max_min_dict['total'] = (
+                    min(global_max_min_dict['total'][0], total_min),
+                    max(global_max_min_dict['total'][1], total_max),
+                )
+            curr_total_col_global_min, curr_total_col_global_max = global_max_min_dict['total']
+            total = cls._vectorized_minmax_normalize(
+                total,
+                curr_global_min=curr_total_col_global_min,
+                curr_global_max=curr_total_col_global_max,
+            )
+
+        a_df['total'] = total
         a_df['is_moving'] = (a_df['total'] > total_change_threshold)
 
-        # moving_only_df = a_df[a_df['is_moving']]
         return a_df
     
 
@@ -296,26 +314,33 @@ class MotionData:
             n = np.linalg.norm(v)
             return v / n if n > 0 else v
 
-        quats = []
-        q = np.array([1.0, 0.0, 0.0, 0.0])
+        n_rows = len(df)
+        if n_rows == 0:
+            return df.copy()
 
-        for i in range(len(df)):
-            if i == 0:
-                quats.append(q.copy())
-                continue
+        t = df[time_col_sec_name].to_numpy(dtype=float)
+        gyro = np.radians(df[['GyroX', 'GyroY', 'GyroZ']].to_numpy(dtype=float))
+        acc = df[['AccX', 'AccY', 'AccZ']].to_numpy(dtype=float)
 
-            dt = df[time_col_sec_name].iloc[i] - df[time_col_sec_name].iloc[i-1]
-            gx, gy, gz = np.radians([df['GyroX'].iloc[i], df['GyroY'].iloc[i], df['GyroZ'].iloc[i]])
-            ax, ay, az = normalize([df['AccX'].iloc[i], df['AccY'].iloc[i], df['AccZ'].iloc[i]])
+        quats = np.empty((n_rows, 4), dtype=float)
+        q = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+        quats[0] = q
+
+        for i in range(1, n_rows):
+            dt = t[i] - t[i - 1]
+            gx, gy, gz = gyro[i]
+            ax, ay, az = normalize(acc[i])
             q1, q2, q3, q4 = q
 
             # Gradient descent correction
-            f1 = 2*(q2*q4 - q1*q3) - ax
-            f2 = 2*(q1*q2 + q3*q4) - ay
-            f3 = 2*(0.5 - q2*q2 - q3*q3) - az
-            J = np.array([[-2*q3,  2*q4, -2*q1,  2*q2],
-                            [ 2*q2,  2*q1,  2*q4,  2*q3],
-                            [ 0,    -4*q2, -4*q3,  0]])
+            f1 = 2 * (q2 * q4 - q1 * q3) - ax
+            f2 = 2 * (q1 * q2 + q3 * q4) - ay
+            f3 = 2 * (0.5 - q2 * q2 - q3 * q3) - az
+            J = np.array([
+                [-2 * q3, 2 * q4, -2 * q1, 2 * q2],
+                [2 * q2, 2 * q1, 2 * q4, 2 * q3],
+                [0, -4 * q2, -4 * q3, 0],
+            ])
             step = normalize(J.T @ np.array([f1, f2, f3]))
 
             gx -= beta * step[0]
@@ -324,17 +349,16 @@ class MotionData:
 
             # Quaternion derivative
             q_dot = 0.5 * np.array([
-                -q2*gx - q3*gy - q4*gz,
-                    q1*gx + q3*gz - q4*gy,
-                    q1*gy - q2*gz + q4*gx,
-                    q1*gz + q2*gy - q3*gx
+                -q2 * gx - q3 * gy - q4 * gz,
+                q1 * gx + q3 * gz - q4 * gy,
+                q1 * gy - q2 * gz + q4 * gx,
+                q1 * gz + q2 * gy - q3 * gx,
             ])
 
-            q += q_dot * dt
-            q = normalize(q)
-            quats.append(q.copy())
+            q = normalize(q + q_dot * dt)
+            quats[i] = q
 
-        quat_df: pd.DataFrame = pd.DataFrame(quats, columns=['qw','qx','qy','qz'])
+        quat_df: pd.DataFrame = pd.DataFrame(quats, columns=['qw', 'qx', 'qy', 'qz'])
         return pd.concat([df.reset_index(drop=True), quat_df], axis=1)
 
     @classmethod

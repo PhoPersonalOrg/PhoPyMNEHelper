@@ -232,22 +232,22 @@ def bandpower(data: NDArray[np.float64], fs: float, method: str, band: tuple[flo
         assert ('high_Hz' in band.columns), f"band.columns: {list(band.columns)}"
         assert ('band_name' in band.columns), f"band.columns: {list(band.columns)}"
         band_names_list: List[str] = band['band_name'].to_list()
-        idx_band = [np.logical_and(freqs >= row.low_Hz, freqs <= row.high_Hz) for row in band.itertuples()]
-        
-        # Check if any frequencies exist in the bands and handle edge cases
+        low_hz = band['low_Hz'].to_numpy(dtype=float)
+        high_hz = band['high_Hz'].to_numpy(dtype=float)
+        idx_band_matrix = (freqs >= low_hz[:, None]) & (freqs <= high_hz[:, None])
+
         bandpower = []
-        for i, an_idx_band in enumerate(idx_band):
-            if np.any(an_idx_band):  # Check if any frequencies fall in this band
+        for i, an_idx_band in enumerate(idx_band_matrix):
+            if np.any(an_idx_band):
                 try:
                     bp = simpson(psd[:, an_idx_band], dx=freq_res)
                     bandpower.append(bp)
                 except (IndexError, ValueError) as e:
-                    # Handle edge cases with insufficient data
                     print(f"Warning: Could not compute bandpower for band {band_names_list[i]}: {e}")
-                    bandpower.append(np.zeros(psd.shape[0]))  # Return zeros for this band
+                    bandpower.append(np.zeros(psd.shape[0]))
             else:
-                print(f"Warning: No frequencies found in band {band_names_list[i]} ({band.iloc[i]['low_Hz']}-{band.iloc[i]['high_Hz']} Hz)")
-                bandpower.append(np.zeros(psd.shape[0]))  # Return zeros for this band
+                print(f"Warning: No frequencies found in band {band_names_list[i]} ({low_hz[i]}-{high_hz[i]} Hz)")
+                bandpower.append(np.zeros(psd.shape[0]))
         
         if relative:
             bandpower = [a_bandpower / total_bandpower for a_bandpower in bandpower] 

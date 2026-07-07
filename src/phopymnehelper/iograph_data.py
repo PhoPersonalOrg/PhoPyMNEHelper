@@ -7,8 +7,9 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
+import polars as pl
 
-from phopylslhelper.datetime_helpers import DISPLAY_TIMEZONE, datetime_to_unix_timestamp
+from phopylslhelper.datetime_helpers import DISPLAY_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,45 @@ class IOGraphProcessor:
             dt_end += pd.Timedelta(days=1)
         return dt_start, dt_end
 
+    @classmethod
+    def _parsed_filename_dt_ranges_vectorized(cls, results_df: pd.DataFrame) -> pd.DataFrame:
+        """Vectorized filename datetime parsing for scan_csv_directory."""
+        starts = pd.Series(pd.NaT, index=results_df.index, dtype="datetime64[ns]")
+        ends = pd.Series(pd.NaT, index=results_df.index, dtype="datetime64[ns]")
+        if results_df.empty:
+            return pd.DataFrame({"parsed_filename_dt_start": starts, "parsed_filename_dt_end": ends})
+
+        valid_mod = results_df["modified_datetime"].notna()
+        dated_mask = results_df["file_name"].apply(_IOGRAPH_FILENAME_TIME_RANGE_DATED_RE.search).notna() & valid_mod
+        if dated_mask.any():
+            for idx in results_df.index[dated_mask]:
+                dt_start, dt_end = cls._parsed_filename_dt_range(
+                    results_df.at[idx, "file_name"],
+                    results_df.at[idx, "modified_datetime"],
+                )
+                starts.at[idx] = dt_start
+                ends.at[idx] = dt_end
+
+        remaining = valid_mod & starts.isna()
+        if remaining.any():
+            extracted = results_df.loc[remaining, "file_name"].str.extract(_IOGRAPH_FILENAME_TIME_RANGE_RE)
+            simple_valid = extracted[0].notna()
+            if simple_valid.any():
+                simple_idx = extracted.index[simple_valid]
+                start_h = extracted.loc[simple_valid, 0].astype(int)
+                start_m = extracted.loc[simple_valid, 1].astype(int)
+                end_h = extracted.loc[simple_valid, 2].astype(int)
+                end_m = extracted.loc[simple_valid, 3].astype(int)
+                base_date = results_df.loc[simple_idx, "modified_datetime"].dt.normalize()
+                dt_start = base_date + pd.to_timedelta(start_h, unit="h") + pd.to_timedelta(start_m, unit="m")
+                dt_end = base_date + pd.to_timedelta(end_h, unit="h") + pd.to_timedelta(end_m, unit="m")
+                rollover = dt_end < dt_start
+                dt_end = dt_end.where(~rollover, dt_end + pd.Timedelta(days=1))
+                starts.loc[simple_idx] = dt_start.values
+                ends.loc[simple_idx] = dt_end.values
+
+        return pd.DataFrame({"parsed_filename_dt_start": starts, "parsed_filename_dt_end": ends})
+
 
     @classmethod
     def scan_csv_directory(cls, directory: Path, output_csv: Path | None = None, *, recursive: bool = False) -> tuple[pd.DataFrame, Path | None]:
@@ -124,8 +164,7 @@ class IOGraphProcessor:
             records.append({"file_path": str(p.resolve()), "file_name": p.name, "created_datetime": created_local, "modified_datetime": modified_local, "size_bytes": st.st_size})
         results_df = pd.DataFrame(records)
         if not results_df.empty:
-            parsed = results_df.apply(lambda row: cls._parsed_filename_dt_range(row["file_name"], row["modified_datetime"]), axis=1, result_type="expand")
-            parsed.columns = ["parsed_filename_dt_start", "parsed_filename_dt_end"]
+            parsed = cls._parsed_filename_dt_ranges_vectorized(results_df)
             results_df = pd.concat([results_df, parsed], axis=1)
         else:
             results_df["parsed_filename_dt_start"] = pd.Series(dtype="datetime64[ns]")
@@ -200,32 +239,47 @@ class IOGraphProcessor:
         session_table["parsed_filename_dt_end"] = pd.to_datetime(session_table["parsed_filename_dt_end"])
         session_table = session_table.sort_values("parsed_filename_dt_start", kind="stable").reset_index(drop=True)
         session_table = _subfn_assign_session_groups(session_table)
-        parts: list[pd.DataFrame] = []
+        parts: list[pl.DataFrame] = []
         skipped_empty = 0
-        for _, row in session_table.iterrows():
-            df = pd.read_csv(row["file_path"])
+        for row in session_table.itertuples(index=False):
+            try:
+                df_pl = pl.read_csv(row.file_path)
+            except Exception:
+                logger.warning("Failed to read IOGraph CSV: %s", row.file_path)
+                continue
             if drop_na_coords:
-                df = df.dropna(subset=["x", "y"])
-            if df.empty:
+                df_pl = df_pl.filter(pl.col("x").is_not_null() & pl.col("y").is_not_null())
+            if df_pl.is_empty():
                 skipped_empty += 1
                 continue
-            t_max = df["time"].max()
-            dt_end = pd.Timestamp(row["parsed_filename_dt_end"])
-            df["sample_time"] = dt_end - pd.to_timedelta(t_max - df["time"], unit="ms")
-            df["session_index"] = int(row["session_index"])
-            df["file_rank_in_session"] = int(row["file_rank_in_session"])
-            df["source_file_name"] = row.get("file_name", Path(row["file_path"]).name)
-            df["parsed_filename_dt_start"] = row["parsed_filename_dt_start"]
-            df["parsed_filename_dt_end"] = row["parsed_filename_dt_end"]
-            parts.append(df[["session_index", "file_rank_in_session", "sample_time", "time", "x", "y", "source_file_name", "parsed_filename_dt_start", "parsed_filename_dt_end"]])
+            t_max = df_pl.select(pl.col("time").max()).item()
+            dt_end = pd.Timestamp(row.parsed_filename_dt_end)
+            time_vals = df_pl.get_column("time").to_numpy()
+            sample_times = dt_end - pd.to_timedelta(t_max - time_vals, unit="ms")
+            source_file_name = getattr(row, "file_name", None) or Path(row.file_path).name
+            df_pl = df_pl.select(["time", "x", "y"]).with_columns(
+                pl.Series("sample_time", sample_times),
+                pl.lit(int(row.session_index)).alias("session_index"),
+                pl.lit(int(row.file_rank_in_session)).alias("file_rank_in_session"),
+                pl.lit(source_file_name).alias("source_file_name"),
+                pl.lit(row.parsed_filename_dt_start).alias("parsed_filename_dt_start"),
+                pl.lit(row.parsed_filename_dt_end).alias("parsed_filename_dt_end"),
+            )
+            parts.append(df_pl)
         if skipped_empty:
             logger.info("Skipped %s session(s) with no valid coordinates after drop_na_coords.", skipped_empty)
         master_cols = ["session_index", "sample_time", "time", "x", "y", "source_file_name", "parsed_filename_dt_start", "parsed_filename_dt_end"]
-        master_df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=master_cols)
-        if not master_df.empty:
-            master_df = master_df.sort_values(["session_index", "file_rank_in_session", "sample_time"], kind="stable")
-            master_df = master_df.drop_duplicates(subset=["session_index", "sample_time"], keep="first")
-            master_df = master_df.drop(columns=["file_rank_in_session"]).sort_values("sample_time", kind="stable").reset_index(drop=True)
+        if parts:
+            master_pl = (
+                pl.concat(parts)
+                .sort(["session_index", "file_rank_in_session", "sample_time"])
+                .unique(subset=["session_index", "sample_time"], keep="first")
+                .drop("file_rank_in_session")
+                .sort("sample_time")
+            )
+            master_df = master_pl.to_pandas()
+        else:
+            master_df = pd.DataFrame(columns=master_cols)
         out_path = Path(output_csv).resolve() if output_csv is not None else None
         if out_path is not None:
             out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -241,7 +295,12 @@ class IOGraphProcessor:
             return pd.DataFrame(columns=[*base_cols, *present_psychometric_cols])
         take_cols = ["sample_time", "x", "y", "session_index", "source_file_name", *present_psychometric_cols]
         detail_df = master_df[take_cols].copy()
-        detail_df["t"] = detail_df["sample_time"].apply(datetime_to_unix_timestamp)
+        detail_df["t"] = (
+            pl.from_pandas(detail_df[["sample_time"]], include_index=False)
+            .select(pl.col("sample_time").cast(pl.Datetime).dt.timestamp("us") / 1_000_000.0)
+            .to_series()
+            .to_numpy()
+        )
         detail_df = detail_df.drop(columns=["sample_time"]).sort_values("t", kind="stable").reset_index(drop=True)
         return detail_df[[*base_cols, *present_psychometric_cols]]
 
