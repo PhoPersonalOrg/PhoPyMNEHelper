@@ -215,12 +215,23 @@ class MaskedValidDataFrameAccessor:
 
         """
         base = self._obj.copy()
+        # Polars include_index=True will map unnamed index to 'index' or use named indices.
+        # We can simulate this by temporarily checking the index names.
         available = set(base.columns)
+        has_index = False
+        for name in (base.index.names if hasattr(base.index, 'names') else []):
+            if name is not None:
+                available.add(name)
+                has_index = True
+            elif hasattr(base.index, 'name') and base.index.name is None and not has_index:
+                # If there's an unnamed index and include_index=True is used, pl.from_pandas uses 'index' by default
+                available.add("index")
+
         if time_col_name not in available:
             raise KeyError(f"time_col_name {time_col_name!r} not found; available: {sorted(available)}")
-        if bool_mask_column_name in available:
+        if bool_mask_column_name in set(base.columns):
             base = base.drop(columns=[bool_mask_column_name])
-            available = set(base.columns)
+            available.remove(bool_mask_column_name)
         iv_cols = set(mask_bad_intervals_df.columns)
         if intervals_start_col_name not in iv_cols:
             raise KeyError(f"intervals_start_col_name {intervals_start_col_name!r} not found on mask_bad_intervals_df; have: {sorted(iv_cols)}")
