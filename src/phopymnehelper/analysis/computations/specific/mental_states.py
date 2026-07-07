@@ -69,7 +69,7 @@ MENTAL_STATE_LINE_COLORS: Dict[str, str] = {
     MENTAL_STATE_DROWSINESS: "#aa44cc",
 }
 
-MENTAL_STATE_LINE_WIDTH: float = 1.2
+MENTAL_STATE_LINE_WIDTH: float = 0.6
 
 MENTAL_STATE_DISPLAY_NAMES: Dict[str, str] = {
     MENTAL_STATE_RELAXATION: "relaxation",
@@ -857,7 +857,7 @@ def apply_frame_mental_states_to_timeline(timeline, result: Optional[Mapping[str
             intervals_df=iv,
             eeg_df=detailed,
             custom_datasource_name=track_key,
-            max_points_per_second=64.0,
+            max_points_per_second=32.0,
             enable_downsampling=True,
             channel_names=list(MENTAL_STATE_COLUMNS),
             normalize=False,
