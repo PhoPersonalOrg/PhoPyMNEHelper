@@ -511,6 +511,21 @@ class LabRecorderXDF:
     
 
     @classmethod
+    def _init_basic_from_pyxdf_payload(cls, a_xdf_file: Path, streams: List[Dict], header: Dict, skipped_stream_names: Optional[List[str]] = None, **kwargs) -> "LabRecorderXDF":
+        if skipped_stream_names is None:
+            skipped_stream_names = []
+        _obj = cls(
+            xdf_file_path=a_xdf_file,
+            xdf_streams=streams,
+            xdf_header=header,
+            skipped_stream_names=skipped_stream_names,
+            **kwargs,
+        )
+        _obj.file_datetime = datetime.strptime(header['info']['datetime'][0], "%Y-%m-%dT%H:%M:%S%z")
+        _obj.file_datetime = _obj.file_datetime.astimezone(timezone.utc)
+        return _obj
+
+    @classmethod
     def init_basic_from_lab_recorder_xdf_file(cls, a_xdf_file: Path, skipped_stream_names: List[str]=None, debug_print=False, **kwargs) -> "LabRecorderXDF":
         """
         note: if debug_print == True, it enables verbose mode which produces tons of logs like:
@@ -565,14 +580,7 @@ class LabRecorderXDF:
         """
         # debug_print = kwargs.pop('debug_print', False)
         streams, header = pyxdf.load_xdf(a_xdf_file, synchronize_clocks=True, handle_clock_resets=True, dejitter_timestamps=False, verbose=debug_print) ## disabled sync since it wasn't working anyway
-        _obj = cls(xdf_file_path=a_xdf_file, xdf_streams=streams, xdf_header=header,
-                # skipped_stream_names=kwargs.pop('skipped_stream_names', None),
-                skipped_stream_names=skipped_stream_names,
-                **kwargs)
-
-        _obj.file_datetime: datetime = datetime.strptime(header['info']['datetime'][0], "%Y-%m-%dT%H:%M:%S%z") # '2025-09-11T17:04:20-0400' -> datetime.datetime(2025, 9, 11, 17, 4, 20, tzinfo=datetime.timezone(datetime.timedelta(days=-1, seconds=72000)))           
-        _obj.file_datetime = _obj.file_datetime.astimezone(timezone.utc)
-        return _obj
+        return cls._init_basic_from_pyxdf_payload(a_xdf_file=a_xdf_file, streams=streams, header=header, skipped_stream_names=skipped_stream_names, **kwargs)
 
 
     def perform_process_xdf_streams(self, debug_print: bool=True):
@@ -965,7 +973,7 @@ class LabRecorderXDF:
 
 
     @classmethod
-    def init_from_lab_recorder_xdf_file(cls, a_xdf_file: Path, should_load_full_file_data: bool=True, debug_print: bool=False, skipped_stream_names: Optional[List[str]]=None):
+    def init_from_lab_recorder_xdf_file(cls, a_xdf_file: Path, should_load_full_file_data: bool=True, debug_print: bool=False, skipped_stream_names: Optional[List[str]]=None, preloaded_streams: Optional[List[Dict]] = None, preloaded_header: Optional[Dict] = None):
         """
 
             Conclusions: `stream_clock_times` is not really needed if auto-sync is working.
@@ -1075,8 +1083,11 @@ class LabRecorderXDF:
                 # 'EventBoard',
             ]
 
-        # Load .xdf
-        _obj: "LabRecorderXDF" = cls.init_basic_from_lab_recorder_xdf_file(a_xdf_file=a_xdf_file, skipped_stream_names=skipped_stream_names, debug_print=debug_print)
+        # Load .xdf (or reuse pyxdf output from an upstream caller to avoid a second disk read)
+        if preloaded_streams is not None and preloaded_header is not None:
+            _obj: "LabRecorderXDF" = cls._init_basic_from_pyxdf_payload(a_xdf_file=a_xdf_file, streams=preloaded_streams, header=preloaded_header, skipped_stream_names=skipped_stream_names)
+        else:
+            _obj = cls.init_basic_from_lab_recorder_xdf_file(a_xdf_file=a_xdf_file, skipped_stream_names=skipped_stream_names, debug_print=debug_print)
         file_datetime = _obj.file_datetime
         if not should_load_full_file_data:
             stream_infos, streams_timestamp_dfs = _obj.perform_process_xdf_streams(debug_print=debug_print)
