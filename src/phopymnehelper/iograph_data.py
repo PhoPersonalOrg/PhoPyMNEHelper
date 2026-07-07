@@ -20,15 +20,10 @@ class IOGraphProcessor:
     """ 
 
     """
-    def __init__(
-        self,
-        *,
-        directory: Optional[Path] = None,
-        file_table_df: Optional[pd.DataFrame] = None,
-        master_df: Optional[pd.DataFrame] = None,
-        recursive: bool = False,
-        drop_na_coords: bool = True,
-    ):
+    all_psychometric_detail_cols = ["backtrack_severity", "impairment_metric", "grab_failed_event"]
+
+
+    def __init__(self, *, directory: Optional[Path] = None, file_table_df: Optional[pd.DataFrame] = None, master_df: Optional[pd.DataFrame] = None, recursive: bool = False, drop_na_coords: bool = True):
         self.directory = Path(directory).resolve() if directory is not None else None
         self.recursive = bool(recursive)
         self.drop_na_coords = bool(drop_na_coords)
@@ -248,93 +243,138 @@ class IOGraphProcessor:
         return detail_df[["t", "x", "y", "session_index", "source_file_name"]]
 
 
+    def computing_psychomotor_metric_columns(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Compute psychomotor metrics from a detail dataframe (`t`, `x`, `y`).
+
+        new_cols_df, intervals_df = IOGraphProcessor.compute_psychomotor_metrics(detail_df=self.detail_df)
+
+        Vectorized implementation: prefix sums plus ``np.searchsorted`` replace the
+        original nested Python loops so cost is ~O(n log n) instead of O(n * window),
+        with no per-row ``df.loc`` scalar access. Behavior matches the original for a
+        ``t``-sorted ``detail_df`` (as produced by ``master_df_to_detail_df``).
+        """
+        detail_cols = self.all_psychometric_detail_cols # ["backtrack_severity", "impairment_metric", "grab_failed_event"]
+
+        new_cols_df, intervals_df = self.compute_psychomotor_metrics(detail_df=self.detail_df)
+        ## add the columns to self
+        assert len(self.master_df) == len(new_cols_df), f"len(self.master_df): {len(self.master_df)} != len(new_cols_df): {len(new_cols_df)}"
+        self.master_df[detail_cols] = new_cols_df[detail_cols] ## add new columns to master_df
+
+
     @classmethod
     def compute_psychomotor_metrics(cls, detail_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
         """Compute psychomotor metrics from a detail dataframe (`t`, `x`, `y`).
 
         new_cols_df, intervals_df = IOGraphProcessor.compute_psychomotor_metrics(detail_df=self.detail_df)
 
+        Vectorized implementation: prefix sums plus ``np.searchsorted`` replace the
+        original nested Python loops so cost is ~O(n log n) instead of O(n * window),
+        with no per-row ``df.loc`` scalar access. Behavior matches the original for a
+        ``t``-sorted ``detail_df`` (as produced by ``master_df_to_detail_df``).
         """
+        detail_cols = ["t", *cls.all_psychometric_detail_cols] # ["backtrack_severity", "impairment_metric", "grab_failed_event"]
+        interval_cols = ["t_start", "t_duration", *cls.all_psychometric_detail_cols] # ["backtrack_severity", "impairment_metric", "grab_failed_event"]
         if detail_df.empty or len(detail_df) < 2:
-            return (
-                pd.DataFrame(columns=["t", "backtrack_severity", "impairment_metric", "grab_failed_event"]),
-                pd.DataFrame(columns=["t_start", "t_duration", "backtrack_severity", "impairment_metric", "grab_failed_event"]),
+            return pd.DataFrame(columns=detail_cols), pd.DataFrame(columns=interval_cols)
+
+        t = detail_df["t"].to_numpy(dtype=float)
+        x = detail_df["x"].to_numpy(dtype=float)
+        y = detail_df["y"].to_numpy(dtype=float)
+        n = t.shape[0]
+
+        # Per-step deltas (index 0 == 0.0, matching the original `.diff().fillna(0)`).
+        dt = np.diff(t, prepend=t[0])
+        dx = np.diff(x, prepend=x[0])
+        dy = np.diff(y, prepend=y[0])
+        dist = np.sqrt(dx**2 + dy**2)
+        angle = np.arctan2(dy, dx)
+        angle_diff = np.diff(angle, prepend=angle[0])
+        angle_diff = (angle_diff + np.pi) % (2 * np.pi) - np.pi
+        abs_adiff = np.abs(angle_diff)
+
+        # Prefix sums over [0, k): sum(arr[a..b]) inclusive == prefix[b + 1] - prefix[a].
+        # `dt >= 0` for t-sorted input keeps `p_dt` monotone so searchsorted is valid.
+        p_dt = np.concatenate(([0.0], np.cumsum(dt)))
+        p_dist = np.concatenate(([0.0], np.cumsum(dist)))
+        p_grab = np.concatenate(([0], np.cumsum(abs_adiff > (np.pi / 2))))
+
+        # Trigger indices: a "backtrack" is a sharp reversal; outer loop starts at i=1.
+        triggers = np.nonzero(abs_adiff > (3 * np.pi / 4))[0]
+        triggers = triggers[triggers >= 1]
+
+        bs = np.zeros(n)
+        im = np.zeros(n)
+        gf = np.zeros(n)
+
+        if triggers.size == 0:
+            result_df = pd.DataFrame(
+                {"t": t, "backtrack_severity": bs, "impairment_metric": im, "grab_failed_event": gf},
+                index=detail_df.index,
             )
+            return result_df, pd.DataFrame(columns=interval_cols)
 
-        df = detail_df.copy()
-        df["dt"] = df["t"].diff().fillna(0)
-        df["dx"] = df["x"].diff().fillna(0)
-        df["dy"] = df["y"].diff().fillna(0)
-        df["angle"] = np.arctan2(df["dy"], df["dx"])
-        df["angle_diff"] = df["angle"].diff().fillna(0)
-        df["angle_diff"] = (df["angle_diff"] + np.pi) % (2 * np.pi) - np.pi
-        df["backtrack_severity"] = 0.0
-        df["impairment_metric"] = 0.0
-        df["grab_failed_event"] = 0.0
+        # Forward window per trigger: largest q with sum(dt[i..q-1]) <= 1.0.
+        q_max = np.searchsorted(p_dt, p_dt[triggers] + 1.0, side="right") - 1
+        backtrack_dur = p_dt[q_max] - p_dt[triggers]
+        backtrack_dist = p_dist[q_max] - p_dist[triggers]
+        end_idx = np.minimum(q_max, n - 1)
 
-        intervals: list[dict[str, float]] = []
-        traj_dist = 0.0
-        traj_dur = 0.0
+        # grab_fail_count: reversals > pi/2 among window indices (i, q_max - 1].
+        gi1 = np.minimum(triggers + 1, n)
+        grab_count = np.where(q_max >= triggers + 1, p_grab[q_max] - p_grab[gi1], 0)
 
-        for i in range(1, len(df)):
-            dt = df.loc[i, "dt"]
-            dx = df.loc[i, "dx"]
-            dy = df.loc[i, "dy"]
-            dist = np.sqrt(dx**2 + dy**2)
-            angle_diff = np.abs(df.loc[i, "angle_diff"])
+        # Trajectory accumulated over non-trigger steps since the previous trigger
+        # (index 0 acts as the initial boundary), which resets at every trigger.
+        prev = np.empty_like(triggers)
+        prev[0] = 0
+        prev[1:] = triggers[:-1]
+        traj_dist = p_dist[triggers] - p_dist[prev + 1]
+        traj_dur = p_dt[triggers] - p_dt[prev + 1]
 
-            if angle_diff > (3 * np.pi / 4):
-                backtrack_dist = 0.0
-                backtrack_dur = 0.0
-                end_idx = i
-                grab_fail_count = 0
+        recorded = (
+            (backtrack_dur > 0)
+            & (backtrack_dur < 1.0)
+            & (traj_dist > 0)
+            & (traj_dur > 0)
+            & (backtrack_dist < traj_dist)
+        )
 
-                for j in range(i, len(df)):
-                    end_idx = j
-                    b_dt = df.loc[j, "dt"]
-                    b_dx = df.loc[j, "dx"]
-                    b_dy = df.loc[j, "dy"]
-                    b_dist = np.sqrt(b_dx**2 + b_dy**2)
+        severity = np.zeros(triggers.shape[0])
+        np.divide(backtrack_dist, traj_dist, out=severity, where=recorded)
+        severity *= 100.0
+        impairment = np.minimum(severity / 100.0, 1.0)
+        grab_failed = np.where(grab_count >= 2, 1.0, 0.0)
 
-                    if backtrack_dur + b_dt > 1.0:
-                        break
+        rec_pos = np.nonzero(recorded)[0]
+        # Fill per-row columns in ascending trigger order so overlapping windows keep
+        # the original "last writer wins" semantics.
+        for k in rec_pos:
+            i0 = triggers[k]
+            e = end_idx[k] + 1
+            bs[i0:e] = severity[k]
+            im[i0:e] = impairment[k]
+            gf[i0:e] = grab_failed[k]
+        ## END for k in rec_pos...
 
-                    backtrack_dur += b_dt
-                    backtrack_dist += b_dist
+        result_df = pd.DataFrame(
+            {"t": t, "backtrack_severity": bs, "impairment_metric": im, "grab_failed_event": gf},
+            index=detail_df.index,
+        )
 
-                    if j > i and np.abs(df.loc[j, "angle_diff"]) > (np.pi / 2):
-                        grab_fail_count += 1
-
-                if 0 < backtrack_dur < 1.0 and traj_dist > 0 and traj_dur > 0 and backtrack_dist < traj_dist:
-                    severity = (backtrack_dist / traj_dist) * 100.0
-                    impairment = min(severity / 100.0, 1.0)
-                    grab_failed = 1.0 if grab_fail_count >= 2 else 0.0
-                    intervals.append(
-                        {
-                            "t_start": df.loc[i, "t"],
-                            "t_duration": backtrack_dur,
-                            "backtrack_severity": severity,
-                            "impairment_metric": impairment,
-                            "grab_failed_event": grab_failed,
-                        }
-                    )
-                    df.loc[i:end_idx, "backtrack_severity"] = severity
-                    df.loc[i:end_idx, "impairment_metric"] = impairment
-                    df.loc[i:end_idx, "grab_failed_event"] = grab_failed
-
-                traj_dist = 0.0
-                traj_dur = 0.0
-            else:
-                traj_dist += dist
-                traj_dur += dt
-
-        intervals_df = pd.DataFrame(intervals)
-        if intervals_df.empty:
+        if rec_pos.size == 0:
+            intervals_df = pd.DataFrame(columns=interval_cols)
+        else:
             intervals_df = pd.DataFrame(
-                columns=["t_start", "t_duration", "backtrack_severity", "impairment_metric", "grab_failed_event"]
+                {
+                    "t_start": t[triggers[rec_pos]],
+                    "t_duration": backtrack_dur[rec_pos],
+                    "backtrack_severity": severity[rec_pos],
+                    "impairment_metric": impairment[rec_pos],
+                    "grab_failed_event": grab_failed[rec_pos],
+                }
             )
 
-        return df[["t", "backtrack_severity", "impairment_metric", "grab_failed_event"]], intervals_df
+        return result_df, intervals_df
 
 
     @classmethod
@@ -358,6 +398,7 @@ class IOGraphProcessor:
                     "parsed_filename_dt_end": grp["parsed_filename_dt_end"].max(),
                 }
             )
+        ## END for session_index, grp in grouped...
         return pd.DataFrame(rows)
 
 
