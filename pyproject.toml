@@ -32,7 +32,9 @@ project-includes = [
 ]
 
 [tool.uv.sources]
-phopylslhelper = { path = "../PhoPyLSLhelper", editable = true }
+phopylslhelper = { git = "https://github.com/CommanderPho/phopylslhelper.git", rev = "develop" }
+
+mne = { git = "https://github.com/CommanderPho/mne-python.git", rev='main' }
 
 [build-system]
 requires = ["hatchling"]
