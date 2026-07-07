@@ -1,6 +1,6 @@
-dependencies = [
-    "mne>=1.8.0",
-]
-
 [tool.uv.sources]
-phopylslhelper = { git = "https://github.com/CommanderPho/phopylslhelper.git" }
+mne = { git = "https://github.com/CommanderPho/mne-python.git", rev='main' }
+phopylslhelper = { git = "https://github.com/CommanderPho/phopylslhelper.git", rev = "develop" }
+
+
+

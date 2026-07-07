@@ -34,8 +34,6 @@ project-includes = [
 [tool.uv.sources]
 phopylslhelper = { path = "../PhoPyLSLhelper", editable = true }
 
-mne = { path = "../mne-python", editable = true }
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
