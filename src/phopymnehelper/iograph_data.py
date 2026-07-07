@@ -242,25 +242,6 @@ class IOGraphProcessor:
         detail_df = detail_df.drop(columns=["sample_time"]).sort_values("t", kind="stable").reset_index(drop=True)
         return detail_df[["t", "x", "y", "session_index", "source_file_name"]]
 
-
-    def computing_psychomotor_metric_columns(self) -> tuple[pd.DataFrame, pd.DataFrame]:
-        """Compute psychomotor metrics from a detail dataframe (`t`, `x`, `y`).
-
-        new_cols_df, intervals_df = IOGraphProcessor.compute_psychomotor_metrics(detail_df=self.detail_df)
-
-        Vectorized implementation: prefix sums plus ``np.searchsorted`` replace the
-        original nested Python loops so cost is ~O(n log n) instead of O(n * window),
-        with no per-row ``df.loc`` scalar access. Behavior matches the original for a
-        ``t``-sorted ``detail_df`` (as produced by ``master_df_to_detail_df``).
-        """
-        detail_cols = self.all_psychometric_detail_cols # ["backtrack_severity", "impairment_metric", "grab_failed_event"]
-
-        new_cols_df, intervals_df = self.compute_psychomotor_metrics(detail_df=self.detail_df)
-        ## add the columns to self
-        assert len(self.master_df) == len(new_cols_df), f"len(self.master_df): {len(self.master_df)} != len(new_cols_df): {len(new_cols_df)}"
-        self.master_df[detail_cols] = new_cols_df[detail_cols] ## add new columns to master_df
-
-
     @classmethod
     def compute_psychomotor_metrics(cls, detail_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
         """Compute psychomotor metrics from a detail dataframe (`t`, `x`, `y`).
@@ -428,6 +409,30 @@ class IOGraphProcessor:
         for col in present_psychometric_cols:
             out_pandas[col] = out_pandas[col].astype(float)
         return out_pandas
+
+
+    # ==================================================================================================================================================================================================================================================================================== #
+    # Instance Methods                                                                                                                                                                                                                                                                     #
+    # ==================================================================================================================================================================================================================================================================================== #
+    def computing_psychomotor_metric_columns(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Compute psychomotor metrics from a detail dataframe (`t`, `x`, `y`).
+
+        master_df, intervals_df = a_processor.computing_psychomotor_metric_columns()
+
+        Vectorized implementation: prefix sums plus ``np.searchsorted`` replace the
+        original nested Python loops so cost is ~O(n log n) instead of O(n * window),
+        with no per-row ``df.loc`` scalar access. Behavior matches the original for a
+        ``t``-sorted ``detail_df`` (as produced by ``master_df_to_detail_df``).
+        """
+        detail_cols = self.all_psychometric_detail_cols # ["backtrack_severity", "impairment_metric", "grab_failed_event"]
+
+        new_cols_df, intervals_df = self.compute_psychomotor_metrics(detail_df=self.detail_df)
+        ## add the columns to self
+        assert len(self.master_df) == len(new_cols_df), f"len(self.master_df): {len(self.master_df)} != len(new_cols_df): {len(new_cols_df)}"
+        self.master_df[detail_cols] = new_cols_df[detail_cols] ## add new columns to master_df
+        return self.master_df, intervals_df
+
+
 
 
 __all__ = ["IOGraphProcessor"]
