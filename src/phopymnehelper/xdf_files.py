@@ -116,7 +116,7 @@ def _is_eeg_stream(stream_type: str, stream_name: str) -> bool:
 
 
 def _is_log_stream(stream_type: str, stream_name: str) -> bool:
-    return (stream_type.upper() in ['MARKERS']) and (stream_name in ['EventBoard', 'TextLogger', 'SeqDebugText'])
+    return (stream_type.upper() in ['MARKERS']) and (stream_name in ['EventBoard', 'TextLogger', 'SeqDebugText', 'WhisperLiveLogger'])
 
 
 
@@ -361,7 +361,7 @@ class LabRecorderXDF:
 
     """
     lab_recorder_to_mne_to_type_dict = {'EEG':'eeg', 'ACC':'eeg', 'GYRO':'eeg', 'RAW': 'eeg'} # 'RAW' for eeg quality
-    stream_name_to_modality_dict = {'Epoc X': DataModalityType.EEG, 'Epoc X Motion':DataModalityType.MOTION, 'Epoc X eQuality': None, 'TextLogger': DataModalityType.PHO_LOG_TO_LSL, 'EventBoard': DataModalityType.PHO_LOG_TO_LSL}
+    stream_name_to_modality_dict = {'Epoc X': DataModalityType.EEG, 'Epoc X Motion':DataModalityType.MOTION, 'Epoc X eQuality': None, 'TextLogger': DataModalityType.PHO_LOG_TO_LSL, 'EventBoard': DataModalityType.PHO_LOG_TO_LSL, 'WhisperLiveLogger': DataModalityType.PHO_LOG_TO_LSL}
 
 
     xdf_file_path: Path = field()

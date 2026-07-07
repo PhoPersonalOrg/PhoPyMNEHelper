@@ -14,6 +14,7 @@ from phopymnehelper.analysis.computations.specific.ADHD_sleep_intrusions import 
 from phopymnehelper.analysis.computations.specific.bad_epochs import BadEpochsQCComputation
 from phopymnehelper.analysis.computations.specific.EEG_Spectograms import EEGSpectrogramComputation
 from phopymnehelper.analysis.computations.specific.jaw_clench_probability import JawClenchProbabilityComputation
+from phopymnehelper.analysis.computations.specific.mental_states import FrameMentalStatesComputation
 
 # xdf_file_name: TypeAlias = str # a name of the xdf file corresponding to a given session
 # EEGComputationId: TypeAlias = Literal["time_independent_bad_channels", "bad_epochs", "raw_data_topo", "cwt", "spectogram"]
@@ -60,6 +61,7 @@ def register_eeg_computation_nodes(registry: ComputationRegistry) -> None:
     _register_node_if_absent(registry, BadEpochsQCComputation().to_computation_node())
     _register_node_if_absent(registry, ThetaDeltaSleepIntrusionComputation().to_computation_node())
     _register_node_if_absent(registry, JawClenchProbabilityComputation().to_computation_node())
+    _register_node_if_absent(registry, FrameMentalStatesComputation().to_computation_node())
 
 
 def session_fingerprint_for_raw_or_path(raw: Any, path: Optional[Path] = None, mtime: Optional[float] = None) -> SessionFingerprint:

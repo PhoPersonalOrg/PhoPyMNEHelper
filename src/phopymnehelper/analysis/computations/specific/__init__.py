@@ -5,6 +5,7 @@ from phopymnehelper.analysis.computations.specific.bad_epochs import BAD_EPOCH_I
 from phopymnehelper.analysis.computations.specific.base import SpecificComputationBase
 from phopymnehelper.analysis.computations.specific.EEG_Spectograms import DEFAULT_SPECTROGRAM_NOVERLAP, DEFAULT_SPECTROGRAM_NPERSEG, EEG_SPECTROGRAM_PARAM_KEYS, EEGSpectrogramComputation, compute_raw_eeg_spectrogram, eeg_spectrogram_params_fingerprint, filter_eeg_spectrogram_params
 from phopymnehelper.analysis.computations.specific.jaw_clench_probability import JawClenchProbabilityComputation, apply_jaw_clench_to_timeline, compute_jaw_clench_probability_from_detailed_df, compute_jaw_clench_probability_from_raw, compute_jaw_clench_probability_merged_for_intervals, compute_jaw_clench_probability_series, compute_jaw_clench_state_intervals_from_prob_df, compute_jaw_clench_state_intervals_from_raw, probability_series_to_clench_intervals
+from phopymnehelper.analysis.computations.specific.mental_states import FrameMentalStatesComputation, apply_frame_mental_states_to_timeline, compute_frame_mental_states_from_detailed_df, compute_frame_mental_states_from_raw, compute_frame_mental_states_merged_for_intervals, compute_frame_mental_states_series
 
 __all__ = [
     "BAD_EPOCH_INTERVALS_TRACK_DEFAULT_NAME",
@@ -14,6 +15,7 @@ __all__ = [
     "DEFAULT_SPECTROGRAM_NPERSEG",
     "EEG_SPECTROGRAM_PARAM_KEYS",
     "EEGSpectrogramComputation",
+    "FrameMentalStatesComputation",
     "SpecificComputationBase",
     "ThetaDeltaSleepIntrusionComputation",
     "apply_bad_epochs_overlays_to_timeline",
@@ -29,11 +31,16 @@ __all__ = [
     "fit_autoreject_bad_sample_mask",
     "JawClenchProbabilityComputation",
     "apply_jaw_clench_to_timeline",
+    "apply_frame_mental_states_to_timeline",
     "compute_jaw_clench_probability_from_detailed_df",
     "compute_jaw_clench_probability_from_raw",
     "compute_jaw_clench_probability_merged_for_intervals",
     "compute_jaw_clench_probability_series",
     "compute_jaw_clench_state_intervals_from_prob_df",
     "compute_jaw_clench_state_intervals_from_raw",
+    "compute_frame_mental_states_from_detailed_df",
+    "compute_frame_mental_states_from_raw",
+    "compute_frame_mental_states_merged_for_intervals",
+    "compute_frame_mental_states_series",
     "probability_series_to_clench_intervals",
 ]
