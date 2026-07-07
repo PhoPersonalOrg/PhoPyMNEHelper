@@ -69,6 +69,30 @@ MENTAL_STATE_LINE_COLORS: Dict[str, str] = {
 
 MENTAL_STATE_LINE_WIDTH: float = 1.2
 
+MENTAL_STATE_DISPLAY_NAMES: Dict[str, str] = {
+    MENTAL_STATE_RELAXATION: "relaxation",
+    MENTAL_STATE_FOCUS: "focus",
+    MENTAL_STATE_STRESS: "stress",
+    MENTAL_STATE_DROWSINESS: "drowsiness",
+}
+
+
+def mental_states_colored_title_html() -> str:
+    """HTML plot title with each mental-state name in its lane color."""
+    parts = [
+        f"<span style='color: {MENTAL_STATE_LINE_COLORS[key]}'>{MENTAL_STATE_DISPLAY_NAMES[key]}</span>"
+        for key in MENTAL_STATE_COLUMNS
+    ]
+    return "EEG mental states (" + " / ".join(parts) + ")"
+
+
+def _apply_mental_states_plot_chrome(ms_plot_item: Any, *, y_max: float) -> None:
+    """Hide axes and apply the colored multi-lane title."""
+    ms_plot_item.setTitle(mental_states_colored_title_html())
+    ms_plot_item.setYRange(0, y_max, padding=0.02)
+    ms_plot_item.hideAxis("left")
+    ms_plot_item.hideAxis("bottom")
+
 
 @dataclass
 class MentalStatesRollingState:
@@ -456,11 +480,7 @@ def _embed_mental_states_track_on_timeline(timeline, ms_ds, ref_name: str) -> Tu
         x0v, x1v = ref_plot.getViewBox().viewRange()[0]
         ms_plot_item.setXRange(x0v, x1v, padding=0)
     y_max = MentalStatesDetailRenderer.default_overview_series_height()
-    ms_plot_item.setTitle("EEG mental states (relaxation / focus / stress / drowsiness, %)")
-    ms_plot_item.setLabel("bottom", "Time (unix s)")
-    ms_plot_item.setLabel("left", "%")
-    ms_plot_item.setYRange(0, y_max, padding=0.02)
-    ms_plot_item.showAxis("left")
+    _apply_mental_states_plot_chrome(ms_plot_item, y_max=y_max)
     timeline.add_track(ms_ds, name=ms_ds.custom_datasource_name, plot_item=ms_plot_item)
     ms_widget.optionsPanel = ms_widget.getOptionsPanel()
     if hasattr(_dock, "updateWidgetsHaveOptionsPanel"):
@@ -516,6 +536,9 @@ def apply_frame_mental_states_to_timeline(timeline, result: Optional[Mapping[str
             ms_ds.intervals_df = iv
             ms_ds.detailed_df = detailed
         ms_ds.source_data_changed_signal.emit()
+        if ms_widget is not None and hasattr(ms_widget, "getRootPlotItem"):
+            from pypho_timeline.rendering.datasources.specific.eeg import MentalStatesDetailRenderer
+            _apply_mental_states_plot_chrome(ms_widget.getRootPlotItem(), y_max=MentalStatesDetailRenderer.default_overview_series_height())
         return (ms_widget, ms_track, ms_ds)
 
     if hasattr(timeline, "teardown_orphaned_track"):
@@ -559,6 +582,7 @@ __all__ = [
     "FRAME_MENTAL_STATE_BANDS",
     "FrameMentalStatesComputation",
     "MENTAL_STATE_COLUMNS",
+    "MENTAL_STATE_DISPLAY_NAMES",
     "MENTAL_STATE_DROWSINESS",
     "MENTAL_STATE_FOCUS",
     "MENTAL_STATE_LINE_COLORS",
@@ -566,6 +590,7 @@ __all__ = [
     "MENTAL_STATE_STRESS",
     "MentalStatesRollingState",
     "apply_frame_mental_states_to_timeline",
+    "mental_states_colored_title_html",
     "compute_frame_mental_states_from_detailed_df",
     "compute_frame_mental_states_from_raw",
     "compute_frame_mental_states_merged_for_intervals",
