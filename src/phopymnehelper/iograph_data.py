@@ -235,12 +235,15 @@ class IOGraphProcessor:
 
     @classmethod
     def master_df_to_detail_df(cls, master_df: pd.DataFrame) -> pd.DataFrame:
+        present_psychometric_cols = [c for c in cls.all_psychometric_detail_cols if c in master_df.columns]
+        base_cols = ["t", "x", "y", "session_index", "source_file_name"]
         if master_df.empty:
-            return pd.DataFrame(columns=["t", "x", "y", "session_index", "source_file_name"])
-        detail_df = master_df[["sample_time", "x", "y", "session_index", "source_file_name"]].copy()
+            return pd.DataFrame(columns=[*base_cols, *present_psychometric_cols])
+        take_cols = ["sample_time", "x", "y", "session_index", "source_file_name", *present_psychometric_cols]
+        detail_df = master_df[take_cols].copy()
         detail_df["t"] = detail_df["sample_time"].apply(datetime_to_unix_timestamp)
         detail_df = detail_df.drop(columns=["sample_time"]).sort_values("t", kind="stable").reset_index(drop=True)
-        return detail_df[["t", "x", "y", "session_index", "source_file_name"]]
+        return detail_df[[*base_cols, *present_psychometric_cols]]
 
     @classmethod
     def compute_psychomotor_metrics(cls, detail_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
