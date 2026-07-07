@@ -497,10 +497,8 @@ def _style_jaw_clench_state_intervals(intervals_df: pd.DataFrame) -> pd.DataFram
     import pyqtgraph as pg
 
     out = intervals_df.copy()
-    fill_color = pg.mkColor("#2a0707")
-    fill_color.setAlphaF(0.92)
-    border_color = pg.mkColor("#4a1010")
-    border_color.setAlphaF(0.95)
+    fill_color = pg.mkColor((0x2A, 0x07, 0x07, int(round(0.92 * 255))))
+    border_color = pg.mkColor((0x4A, 0x10, 0x10, int(round(0.95 * 255))))
     pen = pg.mkPen(border_color, width=1)
     brush = pg.mkBrush(fill_color)
     out["series_vertical_offset"] = 0.0
