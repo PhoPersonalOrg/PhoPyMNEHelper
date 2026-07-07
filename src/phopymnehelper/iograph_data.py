@@ -381,25 +381,46 @@ class IOGraphProcessor:
     def master_df_to_intervals_df(cls, master_df: pd.DataFrame) -> pd.DataFrame:
         if master_df.empty:
             return pd.DataFrame(columns=["t_start", "t_duration", "session_index", "source_file_names", "parsed_filename_dt_start", "parsed_filename_dt_end"])
-        grouped = master_df.groupby("session_index", sort=True)
-        rows = []
-        for session_index, grp in grouped:
-            t_start_dt = pd.to_datetime(grp["parsed_filename_dt_start"].min())
-            t_end_dt = pd.to_datetime(grp["parsed_filename_dt_end"].max())
-            t_start_unix = float(datetime_to_unix_timestamp(t_start_dt))
-            t_end_unix = float(datetime_to_unix_timestamp(t_end_dt))
-            rows.append(
-                {
-                    "t_start": t_start_unix,
-                    "t_duration": float(t_end_unix - t_start_unix),
-                    "session_index": int(session_index),
-                    "source_file_names": ", ".join(sorted(grp["source_file_name"].unique())),
-                    "parsed_filename_dt_start": grp["parsed_filename_dt_start"].min(),
-                    "parsed_filename_dt_end": grp["parsed_filename_dt_end"].max(),
-                }
+        import polars as pl
+        df = pl.from_pandas(master_df)
+
+        # Convert any potential string columns to datetime first to ensure safety
+        for col_name in ["parsed_filename_dt_start", "parsed_filename_dt_end"]:
+            if df.schema[col_name].base_type() != pl.Datetime:
+                try:
+                    df = df.with_columns(pl.col(col_name).str.to_datetime())
+                except Exception:
+                    try:
+                        df = df.with_columns(pl.col(col_name).cast(pl.Datetime))
+                    except Exception:
+                        pass
+
+        out = (
+            df.group_by("session_index", maintain_order=False)
+            .agg(
+                pl.col("parsed_filename_dt_start").min().alias("parsed_filename_dt_start"),
+                pl.col("parsed_filename_dt_end").max().alias("parsed_filename_dt_end"),
+                pl.col("source_file_name").unique().sort().str.join(", ").alias("source_file_names")
             )
-        ## END for session_index, grp in grouped...
-        return pd.DataFrame(rows)
+            .sort("session_index")
+            .with_columns(
+                # Use microseconds then divide to float seconds to match float(datetime_to_unix_timestamp)
+                (pl.col("parsed_filename_dt_start").cast(pl.Datetime).dt.timestamp("us") / 1000000.0).alias("t_start"),
+                (pl.col("parsed_filename_dt_end").cast(pl.Datetime).dt.timestamp("us") / 1000000.0).alias("t_end")
+            )
+            .with_columns(
+                (pl.col("t_end") - pl.col("t_start")).alias("t_duration")
+            )
+            .select(
+                "t_start",
+                "t_duration",
+                "session_index",
+                "source_file_names",
+                "parsed_filename_dt_start",
+                "parsed_filename_dt_end"
+            )
+        )
+        return out.to_pandas()
 
 
 __all__ = ["IOGraphProcessor"]
