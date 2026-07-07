@@ -10,8 +10,11 @@ from phopymnehelper.EEG_data import EEGComputations
 from phopymnehelper.analysis.computations.cache import DiskComputationCache
 from phopymnehelper.analysis.computations.engine import GraphExecutor
 from phopymnehelper.analysis.computations.protocol import DEFAULT_REGISTRY, ArtifactKind, ComputationNode, ComputationRegistry, RunContext, SessionFingerprint
+from phopymnehelper.analysis.computations.specific.ADHD_sleep_intrusions import ThetaDeltaSleepIntrusionComputation
 from phopymnehelper.analysis.computations.specific.bad_epochs import BadEpochsQCComputation
 from phopymnehelper.analysis.computations.specific.EEG_Spectograms import EEGSpectrogramComputation
+from phopymnehelper.analysis.computations.specific.jaw_clench_probability import JawClenchProbabilityComputation
+from phopymnehelper.analysis.computations.specific.mental_states import FrameMentalStatesComputation
 
 # xdf_file_name: TypeAlias = str # a name of the xdf file corresponding to a given session
 # EEGComputationId: TypeAlias = Literal["time_independent_bad_channels", "bad_epochs", "raw_data_topo", "cwt", "spectogram"]
@@ -43,11 +46,8 @@ def ensure_default_eeg_registry() -> ComputationRegistry:
     global _EEG_NODES_REGISTERED
     if _EEG_NODES_REGISTERED:
         return DEFAULT_REGISTRY
-    DEFAULT_REGISTRY.register(ComputationNode(id="time_independent_bad_channels", version="1", deps=(), kind=ArtifactKind.summary, run=_bad_ch_run))
-    DEFAULT_REGISTRY.register(ComputationNode(id="raw_data_topo", version="1", deps=("time_independent_bad_channels",), kind=ArtifactKind.stream, run=_topo_run))
-    DEFAULT_REGISTRY.register(ComputationNode(id="cwt", version="1", deps=("time_independent_bad_channels",), kind=ArtifactKind.stream, run=_cwt_run))
-    DEFAULT_REGISTRY.register(EEGSpectrogramComputation().to_computation_node())
-    DEFAULT_REGISTRY.register(BadEpochsQCComputation().to_computation_node())
+    # Idempotent: DEFAULT_REGISTRY may already hold nodes (e.g. register_eeg_computation_nodes elsewhere or a partial prior run).
+    register_eeg_computation_nodes(DEFAULT_REGISTRY)
     _EEG_NODES_REGISTERED = True
     return DEFAULT_REGISTRY
 
@@ -59,6 +59,9 @@ def register_eeg_computation_nodes(registry: ComputationRegistry) -> None:
     _register_node_if_absent(registry, ComputationNode(id="cwt", version="1", deps=("time_independent_bad_channels",), kind=ArtifactKind.stream, run=_cwt_run))
     _register_node_if_absent(registry, EEGSpectrogramComputation().to_computation_node())
     _register_node_if_absent(registry, BadEpochsQCComputation().to_computation_node())
+    _register_node_if_absent(registry, ThetaDeltaSleepIntrusionComputation().to_computation_node())
+    _register_node_if_absent(registry, JawClenchProbabilityComputation().to_computation_node())
+    _register_node_if_absent(registry, FrameMentalStatesComputation().to_computation_node())
 
 
 def session_fingerprint_for_raw_or_path(raw: Any, path: Optional[Path] = None, mtime: Optional[float] = None) -> SessionFingerprint:
@@ -79,12 +82,12 @@ def session_fingerprint_for_raw_or_path(raw: Any, path: Optional[Path] = None, m
     return SessionFingerprint(canonical_path="unknown_session", mtime=mtime, extra=())
 
 
-def run_eeg_computations_graph(raw: Any, session: SessionFingerprint, global_params: Optional[Mapping[str, Any]] = None, goals: Optional[Sequence[EEGComputationId]] = None, registry: Optional[ComputationRegistry] = None, cache: Optional[DiskComputationCache] = None, use_cache: bool = True, parallel: bool = False, max_workers: int = 4) -> Dict[str, Any]:
+def run_eeg_computations_graph(raw: Any, session: SessionFingerprint, global_params: Optional[Mapping[str, Any]] = None, goals: Optional[Sequence[types.EEGComputationId]] = None, registry: Optional[ComputationRegistry] = None, cache: Optional[DiskComputationCache] = None, use_cache: bool = True, parallel: bool = False, max_workers: int = 4) -> Dict[str, Any]:
     reg = registry
     if reg is None:
         reg = ensure_default_eeg_registry()
     else:
-        if not reg.has("spectogram") or not reg.has("bad_epochs"):
+        if not reg.has("spectogram") or not reg.has("bad_epochs") or not reg.has("theta_delta_sleep_intrusion") or (not reg.has("jaw_clench_probability")) or (not reg.has("mental_states")):
             register_eeg_computation_nodes(reg)
     g = tuple(goals) if goals is not None else EEG_COMPUTATION_IDS_ORDERED
     ctx = RunContext(session=session, raw=raw)

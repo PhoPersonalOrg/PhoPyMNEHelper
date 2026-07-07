@@ -1,0 +1,3 @@
+[tool.uv.sources]
+mne = { path = "{ACTIVE_DEV_PATH_PREFIX}/mne-python", editable = true }
+phopylslhelper = { path = "{ACTIVE_DEV_PATH_PREFIX}/PhoPyLSLhelper", editable = true }

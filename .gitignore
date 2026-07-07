@@ -11,4 +11,6 @@ src/phopymnehelper/resources/ElectrodeLayouts/head_bem_1922V_fill.stl
 .idea
 .specstory
 **/desktop.ini
-templating/uv_deps_switcher/backups
+
+# uv-deps-switcher
+**/templating/uv_deps_switcher/backups

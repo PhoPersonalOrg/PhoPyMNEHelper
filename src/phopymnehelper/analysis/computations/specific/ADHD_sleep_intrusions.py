@@ -1,149 +1,168 @@
-"""ADHD / sleep-intrusion style theta–delta ratio from EEG with motion masking and optional autoreject.
+"""ADHD / sleep-intrusion theta/delta band-power ratio from EEG with optional motion masking.
 
-Motion high-acceleration intervals are merged as MNE annotations (``BAD_motion``) and excluded from
-sliding-window spectral analysis. Per-session bad channels use ``EEGComputations.time_independent_bad_channels``
-(pyprep). Optional autoreject marks additional epoch spans as invalid for the ratio time series.
+Sliding-window PSD over good EEG channels. Motion windows are excluded by intersecting against
+``BAD_motion`` annotations derived from ``motion_df`` (when provided). Optional autoreject masking
+is supported via :func:`phopymnehelper.analysis.computations.specific.bad_epochs.fit_autoreject_bad_sample_mask`.
 
-Passing ``motion_df`` imports ``MotionData`` (same dependency chain as ``phopymnehelper.motion_data``, including
-``pypho_timeline`` where applicable). With ``motion_df=None`` the analysis runs without that import.
+Public surfaces:
 
-For DAG / :class:`~phopymnehelper.analysis.computations.protocol.ComputationNode` use,
-:class:`ThetaDeltaSleepIntrusionComputation` (``to_computation_node()`` / ``run_fn()``); direct scripts and
-notebooks can keep calling :func:`compute_theta_delta_sleep_intrusion_series`.
+- :func:`compute_theta_delta_sleep_intrusion_series` -- one raw → flat dict (``times`` are raw-relative seconds)
+- :func:`compute_theta_delta_sleep_intrusion_merged_for_intervals` -- one row per aligned raw/interval → stitched dict (``times`` absolute unix when passed to timeline apply)
+- :class:`ThetaDeltaSleepIntrusionComputation` -- DAG node wrapper for ``run_eeg_computations_graph``
+- :func:`apply_adhd_sleep_intrusion_to_timeline` -- adds/refreshes the ``{eeg_ds_name}_theta_delta`` track
 
-Example (synthetic EEG, no motion dataframe):
+Typical usage::
 
-    import numpy as np
-    import mne
-    from phopymnehelper.analysis.computations.specific import compute_theta_delta_sleep_intrusion_series
+    from phopymnehelper.analysis.computations.eeg_registry import run_eeg_computations_graph, session_fingerprint_for_raw_or_path
+    from phopymnehelper.analysis.computations.specific.ADHD_sleep_intrusions import apply_adhd_sleep_intrusion_to_timeline
 
-    sfreq, n_ch, n_times = 100.0, 4, 2000
-    data = np.random.randn(n_ch, n_times) * 1e-6
-    info = mne.create_info([f"EEG{i}" for i in range(n_ch)], sfreq, "eeg")
-    raw = mne.io.RawArray(data, info)
-    out = compute_theta_delta_sleep_intrusion_series(raw, motion_df=None, window_sec=2.0, step_sec=1.0)
-    assert "theta_delta_ratio" in out and len(out["times"]) == len(out["theta_delta_ratio"])
+    result = run_eeg_computations_graph(eeg_raw, session=session_fingerprint_for_raw_or_path(eeg_raw), goals=("theta_delta_sleep_intrusion",))["theta_delta_sleep_intrusion"]
+    apply_adhd_sleep_intrusion_to_timeline(timeline, result, eeg_name=eeg_name, eeg_ds=eeg_ds)
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
+from datetime import datetime
+import logging
 import warnings
-from typing import Any, Callable, ClassVar, Dict, FrozenSet, List, Mapping, Optional, Tuple
+from typing import Any, ClassVar, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import mne
 import numpy as np
 import pandas as pd
 from scipy import signal
 
-from phopymnehelper.EEG_data import EEGComputations
 from phopymnehelper.analysis.computations.protocol import ArtifactKind, RunContext
 from phopymnehelper.analysis.computations.specific.bad_epochs import fit_autoreject_bad_sample_mask
 from phopymnehelper.analysis.computations.specific.base import SpecificComputationBase
 
-
-THETA_DELTA_SLEEP_INTRUSION_PARAM_KEYS: FrozenSet[str] = frozenset(
-    {
-        "motion_df",
-        "total_accel_threshold",
-        "minimum_motion_bad_duration",
-        "meas_date",
-        "l_freq",
-        "h_freq",
-        "window_sec",
-        "step_sec",
-        "delta_band",
-        "theta_band",
-        "use_autoreject",
-        "autoreject_epoch_sec",
-        "autoreject_kwargs",
-        "bad_channel_kwargs",
-        "channel_agg",
-        "copy_raw",
-        "motion_description_substr",
-    }
-)
+logger = logging.getLogger(__name__)
 
 
-def filter_theta_delta_sleep_intrusion_params(params: Mapping[str, Any]) -> Dict[str, Any]:
-    return {k: params[k] for k in THETA_DELTA_SLEEP_INTRUSION_PARAM_KEYS if k in params}
+ANALYSIS_TRACK_NAME: str = "ANALYSIS_theta_delta"  # legacy single-stream name; use theta_delta_track_key_for_eeg_datasource per EEG track
+MOTION_BAD_DESC: str = "BAD_motion"
 
 
-def theta_delta_sleep_intrusion_params_fingerprint(params: Mapping[str, Any]) -> str:
-    f = filter_theta_delta_sleep_intrusion_params(params)
-    payload: Dict[str, Any] = {}
-    for k, v in sorted(f.items()):
-        if k == "motion_df":
-            if v is None:
-                payload[k] = None
-            else:
-                try:
-                    from pandas.util import hash_pandas_object
-                    ho = hash_pandas_object(v)
-                    arr = np.ascontiguousarray(np.asarray(ho, dtype=np.uint64))
-                    hb = hashlib.sha256(arr.tobytes()).hexdigest()[:24]
-                except Exception:
-                    hb = f"rows{len(v)}cols{len(v.columns)}"
-                payload[k] = {"n": len(v), "cols": list(v.columns), "h": hb}
-        else:
-            payload[k] = v
-    return json.dumps(payload, sort_keys=True, default=str)
+def interval_row_t_start_unix_seconds(iv: pd.Series) -> float:
+    """Normalize a single overview interval row's ``t_start`` to unix seconds (float).
 
-
-def _merge_annotations(raw: mne.io.BaseRaw, extra: mne.Annotations) -> None:
-    cur = raw.annotations
-    if cur is None or len(cur) == 0:
-        raw.set_annotations(extra)
-    else:
-        raw.set_annotations(cur + extra)
-
-
-def _annotations_intervals_seconds(annots: Optional[mne.Annotations]) -> List[Tuple[float, float, str]]:
-    if annots is None or len(annots) == 0:
-        return []
-    out: List[Tuple[float, float, str]] = []
-    for k in range(len(annots)):
-        d = float(annots.duration[k])
-        out.append((float(annots.onset[k]), float(annots.onset[k]) + d, str(annots.description[k])))
+    Expect ``t_start`` as timezone-aware/arithmetic ``datetime``/``Timestamp``, or numeric
+    **unix seconds**. Avoid mixing timelines (e.g. raw-relative floats) without
+    ``raw_relative_times_to_timeline_unix`` first — mis-anchored merges yield empty slices in
+    interval-masked fetch.
+    """
+    ts = iv["t_start"]
+    if isinstance(ts, (datetime, pd.Timestamp)):
+        dt = pd.Timestamp(ts)
+        if dt.tzinfo is None:
+            dt = dt.tz_localize("UTC")
+        return float(dt.timestamp())
+    out = float(pd.to_numeric(ts, errors="coerce"))
+    if not np.isfinite(out):
+        raise ValueError(f"Non-finite t_start in interval row: {ts!r}")
     return out
 
 
-def _window_overlaps_intervals(t0: float, t1: float, intervals: List[Tuple[float, float, str]], description_filter: Optional[str]) -> bool:
-    for a0, a1, desc in intervals:
-        if description_filter is not None and description_filter not in desc:
-            continue
-        if t0 < a1 and t1 > a0:
-            return True
-    return False
+def raw_relative_times_to_timeline_unix(times_rel: np.ndarray, *, interval_t_start_unix: float, raw_times_first: float) -> np.ndarray:
+    """Map MNE raw-relative window-center times to absolute unix seconds on the timeline.
+
+    ``interval_t_start_unix`` is the unix time of the first sample of that segment (matches
+    ``intervals_df`` ``t_start``). ``raw_times_first`` is ``float(raw.times[0])`` (usually 0).
+    """
+    return float(interval_t_start_unix) + (np.asarray(times_rel, dtype=float) - float(raw_times_first))
 
 
-def _sliding_window_edges(tmax: float, window_sec: float, step_sec: float) -> List[Tuple[float, float, float]]:
-    if window_sec <= 0 or step_sec <= 0:
-        raise ValueError("window_sec and step_sec must be positive")
-    out: List[Tuple[float, float, float]] = []
-    t0 = 0.0
-    while t0 + window_sec <= tmax + 1e-9:
-        t1 = t0 + window_sec
-        center = 0.5 * (t0 + t1)
-        out.append((t0, t1, center))
-        t0 += step_sec
-    return out
+def intervals_df_for_theta_delta_track(eeg_ds: Any, result: Mapping[str, Any], *, log_prefix: str) -> pd.DataFrame:
+    """Subset parent EEG ``intervals_df`` when merge produced fewer stitched segments than parent rows.
+
+    When ``aligned_chronological_raws_for_intervals`` returns fewer raws than ``intervals_df`` rows,
+    :func:`compute_theta_delta_sleep_intrusion_merged_for_intervals` only fills times for ``n`` paired
+    segments but the naive track would copy the full ``intervals_df``, leaving trailing intervals with
+    no ``detailed_df`` samples — each fetch masks to zero rows.
+
+    Uses ``result['merged_n_segments']`` from the merged compute path only; otherwise returns a full copy.
+    """
+    iv = getattr(eeg_ds, "intervals_df", None)
+    if iv is None or len(iv) == 0:
+        raise ValueError(f"{log_prefix}: eeg_ds.intervals_df is missing or empty")
+    n_full = len(iv)
+    n_merge = result.get("merged_n_segments")
+    if isinstance(n_merge, int) and n_merge > 0 and n_merge < n_full:
+        logger.info("%s: theta/delta track uses %s interval row(s) (merged_n_segments=%s; parent EEG has %s).", log_prefix, n_merge, n_merge, n_full)
+        return iv.iloc[:n_merge].copy()
+    return iv.copy()
 
 
-def _bandpower_from_psd(psd_1d: np.ndarray, freqs: np.ndarray, band: Tuple[float, float]) -> float:
-    lo, hi = band
-    m = (freqs >= lo) & (freqs <= hi)
-    if not np.any(m):
-        return float("nan")
-    return float(np.trapz(psd_1d[m], freqs[m]))
+def compute_theta_delta_sleep_intrusion_merged_for_intervals(raws: Sequence[mne.io.BaseRaw], intervals_df: pd.DataFrame, *, motion_df: Optional[pd.DataFrame] = None, **compute_kw: Any) -> Dict[str, Any]:
+    """Run :func:`compute_theta_delta_sleep_intrusion_series` per raw, stitch into one absolute-time series.
+
+    Assumes ``raws[i]`` corresponds to ``intervals_df.iloc[i]`` (same contract as
+    ``RawProvidingTrackDatasource.aligned_chronological_raws_for_intervals``). Returned
+    ``times`` are **absolute unix seconds**; set ``times_are_absolute_unix`` so
+    :func:`apply_adhd_sleep_intrusion_to_timeline` does not add ``t0`` again.
+
+    Orphan interval rows or raws beyond ``min(n_raws, n_intervals)`` are ignored; a warning is logged.
+    """
+    n_iv = len(intervals_df)
+    n_raw = len(raws)
+    n = min(n_raw, n_iv)
+    if n_raw != n_iv:
+        logger.warning("theta_delta merge: raw count (%s) != interval count (%s); computing %s aligned segment(s).", n_raw, n_iv, n)
+    if n == 0:
+        raise ValueError("compute_theta_delta_sleep_intrusion_merged_for_intervals: no raw/interval pairs (empty inputs).")
+
+    all_t: List[np.ndarray] = []
+    all_y: List[np.ndarray] = []
+    last_params: Optional[Dict[str, Any]] = None
+    motion_df_out_last: Optional[pd.DataFrame] = None
+
+    for i in range(n):
+        raw = raws[i]
+        iv = intervals_df.iloc[i]
+        anchor = interval_row_t_start_unix_seconds(iv)
+        raw_t0 = float(np.asarray(raw.times)[0]) if len(raw.times) > 0 else 0.0
+        sub = compute_theta_delta_sleep_intrusion_series(raw, motion_df=motion_df, meas_date=raw.info.get("meas_date"), **compute_kw)
+        t_rel = np.asarray(sub["times"], dtype=float)
+        y = np.asarray(sub["theta_delta_ratio"], dtype=float)
+        t_abs = raw_relative_times_to_timeline_unix(t_rel, interval_t_start_unix=anchor, raw_times_first=raw_t0)
+        all_t.append(t_abs)
+        all_y.append(y)
+        last_params = sub.get("params")
+        if sub.get("motion_high_accel_df") is not None:
+            motion_df_out_last = sub["motion_high_accel_df"]
+
+        t_end_iv = anchor + float(iv["t_duration"])
+        if t_abs.size:
+            t_min, t_max = float(np.nanmin(t_abs)), float(np.nanmax(t_abs))
+            logger.info("theta_delta segment %s/%s: interval t_start=%.3f t_end~=%.3f | series t [%.3f, %.3f] (n=%s)", i + 1, n, anchor, t_end_iv, t_min, t_max, t_abs.size)
+            if t_max < anchor - 1.0 or t_min > t_end_iv + 1.0:
+                logger.warning("theta_delta segment %s: series unix range may not overlap interval bounds (check t_start vs raw).", i + 1)
+
+    times_out = np.concatenate(all_t) if len(all_t) > 1 else all_t[0]
+    ratio_out = np.concatenate(all_y) if len(all_y) > 1 else all_y[0]
+    n_valid = int(np.sum(np.isfinite(ratio_out)))
+    session_mean = float(np.nanmean(ratio_out)) if n_valid > 0 else float("nan")
+
+    return dict(times=times_out, theta_delta_ratio=ratio_out, session_mean_theta_delta=session_mean, n_windows=len(times_out), n_valid_windows=n_valid, t0_unix=None, motion_high_accel_df=motion_df_out_last, params=last_params or {}, times_are_absolute_unix=True, merged_n_segments=n)
 
 
-def _psd_multitaper_or_welch(sig_2d: np.ndarray, sfreq: float, adaptive: bool = True) -> Tuple[np.ndarray, np.ndarray]:
+def _good_picks(raw: mne.io.BaseRaw) -> np.ndarray:
+    """Return indices of good channels for spectral analysis with sane fallbacks.
+
+    First tries EEG-typed channels; if none, falls back to all non-bad data channels by name.
+    """
+    picks = mne.pick_types(raw.info, eeg=True, exclude="bads")
+    if picks.size > 0:
+        return picks
+    bads = set(raw.info.get("bads") or [])
+    return np.asarray([i for i, ch in enumerate(raw.ch_names) if ch not in bads], dtype=int)
+
+
+def _psd(sig_2d: np.ndarray, sfreq: float) -> Tuple[np.ndarray, np.ndarray]:
     try:
         from mne.time_frequency import psd_array_multitaper
-        psd, freqs = psd_array_multitaper(sig_2d, sfreq, adaptive=adaptive, verbose="ERROR")
-        return psd, freqs
+        out = psd_array_multitaper(sig_2d, sfreq, adaptive=True, verbose="ERROR")
+        return np.asarray(out[0]), np.asarray(out[1])
     except Exception:
         n = sig_2d.shape[1]
         nperseg = min(int(sfreq * 2), n) if n >= 8 else n
@@ -153,63 +172,26 @@ def _psd_multitaper_or_welch(sig_2d: np.ndarray, sfreq: float, adaptive: bool = 
         return psd, freqs
 
 
-def _window_hits_sample_mask(t0: float, t1: float, sfreq: float, n_times: int, sample_mask: np.ndarray) -> bool:
-    i0 = max(0, int(np.floor(t0 * sfreq)))
-    i1 = min(n_times, int(np.ceil(t1 * sfreq)))
-    if i1 <= i0:
-        return False
-    return bool(np.any(sample_mask[i0:i1]))
+def _bandpower(psd_1d: np.ndarray, freqs: np.ndarray, band: Tuple[float, float]) -> float:
+    lo, hi = band
+    m = (freqs >= lo) & (freqs <= hi)
+    if not np.any(m):
+        return float("nan")
+    return float(np.trapz(psd_1d[m], freqs[m]))
 
 
-def compute_theta_delta_sleep_intrusion_series(raw_eeg: mne.io.BaseRaw, motion_df: Optional[pd.DataFrame] = None, *, total_accel_threshold: float = 0.5, minimum_motion_bad_duration: float = 0.05, meas_date: Any = None, l_freq: float = 1.0, h_freq: Optional[float] = 40.0, window_sec: float = 4.0, step_sec: float = 1.0, delta_band: Tuple[float, float] = (1.0, 4.0), theta_band: Tuple[float, float] = (4.0, 8.0), use_autoreject: bool = False, autoreject_epoch_sec: float = 3.0, autoreject_kwargs: Optional[Mapping[str, Any]] = None, bad_channel_kwargs: Optional[Mapping[str, Any]] = None, channel_agg: str = "mean", copy_raw: bool = True, motion_description_substr: str = "BAD_motion") -> Dict[str, Any]:
-    """Compute sliding-window theta/d delta power ratio with motion and QC exclusions.
+def compute_theta_delta_sleep_intrusion_series(raw_eeg: mne.io.BaseRaw, *, motion_df: Optional[pd.DataFrame] = None, total_accel_threshold: float = 0.5, minimum_motion_bad_duration: float = 0.05, meas_date: Any = None, l_freq: float = 1.0, h_freq: Optional[float] = 40.0, window_sec: float = 4.0, step_sec: float = 1.0, delta_band: Tuple[float, float] = (1.0, 4.0), theta_band: Tuple[float, float] = (4.0, 8.0), use_autoreject: bool = False, autoreject_epoch_sec: float = 3.0, autoreject_kwargs: Optional[Mapping[str, Any]] = None, channel_agg: str = "mean", copy_raw: bool = True) -> Dict[str, Any]:
+    """Compute the sliding-window theta/delta band-power ratio.
 
-    ``motion_df`` must use column ``t`` (seconds, aligned with ``raw_eeg.times``). When ``motion_df`` is
-    passed, ``meas_date`` defaults to ``raw_eeg.info['meas_date']`` for annotation alignment.
-
-    Parameters
-    ----------
-    raw_eeg :
-        Continuous EEG (``mne.io.Raw`` or compatible).
-    motion_df :
-        Optional motion detail dataframe (see ``MotionData.find_high_accel_periods``).
-    total_accel_threshold, minimum_motion_bad_duration :
-        Passed to ``MotionData.find_high_accel_periods`` (as ``total_accel_threshold`` / ``minimum_bad_duration``).
-    l_freq, h_freq :
-        Bandpass before spectral analysis (MNI highpass / lowpass).
-    window_sec, step_sec :
-        Sliding analysis window length and step (seconds).
-    delta_band, theta_band :
-        Frequency limits (Hz) for band power; delta low edge should be ``>= l_freq`` if possible.
-    use_autoreject :
-        If True, fit autoreject on fixed-length epochs (with ``reject_by_annotation='omit'``) and NaN-out
-        windows overlapping autoreject-bad epoch spans. Does not run ICA.
-    autoreject_epoch_sec :
-        Fixed epoch length for autoreject only.
-    autoreject_kwargs :
-        Extra keyword arguments for ``autoreject.AutoReject`` (merged over defaults).
-    bad_channel_kwargs :
-        Passed through to ``EEGComputations.time_independent_bad_channels``.
-    channel_agg :
-        ``\"mean\"`` or ``\"median\"`` across good EEG channels before PSD.
-    copy_raw :
-        If True, analyze a copy of ``raw_eeg`` (recommended).
-    motion_description_substr :
-        Annotations containing this substring are treated as motion bad for window rejection.
-
-    Returns
-    -------
-    dict
-        ``times``, ``theta_delta_ratio``, ``session_mean_theta_delta``, ``n_windows``, ``n_valid_windows``,
-        ``bad_channel_result``, ``motion_high_accel_df``, ``params``.
+    Returns a flat dict with ``times``, ``theta_delta_ratio``, ``session_mean_theta_delta``,
+    ``n_windows``, ``n_valid_windows``, ``motion_high_accel_df``, ``params``.
     """
     if channel_agg not in ("mean", "median"):
         raise ValueError("channel_agg must be 'mean' or 'median'")
-    if delta_band[0] < l_freq:
-        warnings.warn(f"delta_band lower edge {delta_band[0]} is below highpass l_freq={l_freq}; interpret band powers with care", RuntimeWarning, stacklevel=2)
 
     raw = raw_eeg.copy() if copy_raw else raw_eeg
     raw.load_data()
+
     nyq = 0.5 * float(raw.info["sfreq"])
     eff_h_freq = h_freq
     if eff_h_freq is not None and eff_h_freq >= nyq:
@@ -217,88 +199,104 @@ def compute_theta_delta_sleep_intrusion_series(raw_eeg: mne.io.BaseRaw, motion_d
         warnings.warn(f"h_freq {h_freq} >= Nyquist ({nyq}); using {eff_h_freq}", RuntimeWarning, stacklevel=2)
 
     motion_df_out: Optional[pd.DataFrame] = None
-    motion_annots: Optional[mne.Annotations] = None
     if motion_df is not None:
         from phopymnehelper.motion_data import MotionData
         md = meas_date if meas_date is not None else raw.info.get("meas_date")
-        motion_annots, motion_df_out = MotionData.find_high_accel_periods(
-            a_ds=motion_df,
-            total_accel_threshold=total_accel_threshold,
-            should_set_bad_period_annotations=False,
-            minimum_bad_duration=minimum_motion_bad_duration,
-            meas_date=md,
-        )
-        _merge_annotations(raw, motion_annots)
+        motion_annots, motion_df_out = MotionData.find_high_accel_periods(a_ds=motion_df, total_accel_threshold=total_accel_threshold, should_set_bad_period_annotations=False, minimum_bad_duration=minimum_motion_bad_duration, meas_date=md)
+        cur = raw.annotations
+        raw.set_annotations(motion_annots if (cur is None or len(cur) == 0) else cur + motion_annots)
 
     raw.filter(l_freq=l_freq, h_freq=eff_h_freq, verbose=False)
-    bad_channel_result = EEGComputations.time_independent_bad_channels(raw, **dict(bad_channel_kwargs or {}))
-    picks = mne.pick_types(raw.info, eeg=True, exclude="bads")
+
+    picks = _good_picks(raw)
     if picks.size == 0:
-        warnings.warn("No good EEG picks after bad-channel detection; returning empty series", RuntimeWarning, stacklevel=2)
-        empty = np.array([], dtype=float)
-        params = dict(total_accel_threshold=total_accel_threshold, minimum_motion_bad_duration=minimum_motion_bad_duration, l_freq=l_freq, h_freq=eff_h_freq, h_freq_requested=h_freq, window_sec=window_sec, step_sec=step_sec, delta_band=delta_band, theta_band=theta_band, use_autoreject=use_autoreject, autoreject_epoch_sec=autoreject_epoch_sec, channel_agg=channel_agg, motion_description_substr=motion_description_substr)
-        return dict(times=empty, theta_delta_ratio=empty, session_mean_theta_delta=float("nan"), n_windows=0, n_valid_windows=0, bad_channel_result=bad_channel_result, motion_high_accel_df=motion_df_out, params=params)
+        raise ValueError(f"No usable channels in raw (n_channels={len(raw.ch_names)}, bads={raw.info.get('bads')})")
 
-    ar_mask: Optional[np.ndarray] = None
-    if use_autoreject:
-        ar_mask = fit_autoreject_bad_sample_mask(raw, autoreject_epoch_sec=autoreject_epoch_sec, autoreject_kwargs=autoreject_kwargs)
+    ar_mask: Optional[np.ndarray] = fit_autoreject_bad_sample_mask(raw, autoreject_epoch_sec=autoreject_epoch_sec, autoreject_kwargs=autoreject_kwargs) if use_autoreject else None
 
-    annot_intervals = _annotations_intervals_seconds(raw.annotations)
     sfreq = float(raw.info["sfreq"])
     n_times = int(raw.n_times)
     tmax = float(raw.times[-1])
-    edges = _sliding_window_edges(tmax, window_sec, step_sec)
 
-    times_list: List[float] = []
-    ratio_list: List[float] = []
+    annots = raw.annotations
+    motion_intervals: list = []
+    if annots is not None and len(annots) > 0:
+        for k in range(len(annots)):
+            desc = str(annots.description[k])
+            if MOTION_BAD_DESC not in desc:
+                continue
+            t0_a = float(annots.onset[k])
+            motion_intervals.append((t0_a, t0_a + float(annots.duration[k])))
+
+    if window_sec <= 0 or step_sec <= 0:
+        raise ValueError("window_sec and step_sec must be positive")
+
+    times_list: list = []
+    ratio_list: list = []
     eps = 1e-10
+    min_samples = max(8, int(0.5 * window_sec * sfreq))
+    t0 = 0.0
+    while t0 + window_sec <= tmax + 1e-9:
+        t1 = t0 + window_sec
+        tc = 0.5 * (t0 + t1)
+        times_list.append(tc)
 
-    for t0, t1, tc in edges:
-        if _window_overlaps_intervals(t0, t1, annot_intervals, motion_description_substr):
-            times_list.append(tc)
+        hits_motion = any((t0 < a1 and t1 > a0) for a0, a1 in motion_intervals)
+        if hits_motion:
             ratio_list.append(float("nan"))
+            t0 += step_sec
             continue
-        if ar_mask is not None and _window_hits_sample_mask(t0, t1, sfreq, n_times, ar_mask):
-            times_list.append(tc)
-            ratio_list.append(float("nan"))
-            continue
+
+        if ar_mask is not None:
+            i0 = max(0, int(np.floor(t0 * sfreq)))
+            i1 = min(n_times, int(np.ceil(t1 * sfreq)))
+            if i1 > i0 and bool(np.any(ar_mask[i0:i1])):
+                ratio_list.append(float("nan"))
+                t0 += step_sec
+                continue
+
         s0 = max(0, int(np.floor(t0 * sfreq)))
         s1 = min(n_times, int(np.ceil(t1 * sfreq)))
-        if s1 - s0 < max(8, int(0.5 * window_sec * sfreq)):
-            times_list.append(tc)
+        if s1 - s0 < min_samples:
             ratio_list.append(float("nan"))
+            t0 += step_sec
             continue
+
         block = raw.get_data(picks=picks, start=s0, stop=s1)
-        if channel_agg == "mean":
-            sig1 = np.mean(block, axis=0, keepdims=True)
-        else:
-            sig1 = np.median(block, axis=0, keepdims=True)
+        agg = np.mean(block, axis=0, keepdims=True) if channel_agg == "mean" else np.median(block, axis=0, keepdims=True)
         try:
-            psd, freqs = _psd_multitaper_or_welch(sig1, sfreq)
+            psd, freqs = _psd(agg, sfreq)
         except Exception:
-            times_list.append(tc)
             ratio_list.append(float("nan"))
+            t0 += step_sec
             continue
-        p_psd = psd[0]
-        p_delta = _bandpower_from_psd(p_psd, freqs, delta_band)
-        p_theta = _bandpower_from_psd(p_psd, freqs, theta_band)
+
+        p_delta = _bandpower(psd[0], freqs, delta_band)
+        p_theta = _bandpower(psd[0], freqs, theta_band)
         if not np.isfinite(p_delta) or not np.isfinite(p_theta):
-            times_list.append(tc)
             ratio_list.append(float("nan"))
+            t0 += step_sec
             continue
-        times_list.append(tc)
+
         ratio_list.append(float(p_theta / (p_delta + eps)))
-    ## END for t0, t1, tc in edges...
+        t0 += step_sec
 
     times_arr = np.asarray(times_list, dtype=float)
     ratio_arr = np.asarray(ratio_list, dtype=float)
-    valid = np.isfinite(ratio_arr)
-    n_valid = int(np.sum(valid))
+    n_valid = int(np.sum(np.isfinite(ratio_arr)))
     session_mean = float(np.nanmean(ratio_arr)) if n_valid > 0 else float("nan")
 
-    params = dict(total_accel_threshold=total_accel_threshold, minimum_motion_bad_duration=minimum_motion_bad_duration, l_freq=l_freq, h_freq=eff_h_freq, h_freq_requested=h_freq, window_sec=window_sec, step_sec=step_sec, delta_band=tuple(delta_band), theta_band=tuple(theta_band), use_autoreject=use_autoreject, autoreject_epoch_sec=autoreject_epoch_sec, channel_agg=channel_agg, motion_description_substr=motion_description_substr)
+    md = raw.info.get("meas_date")
+    t0_unix: Optional[float] = None
+    if md is not None:
+        try:
+            t0_unix = float(md.timestamp()) if hasattr(md, "timestamp") else float(md)
+        except (TypeError, ValueError, OSError):
+            t0_unix = None
 
-    return dict(times=times_arr, theta_delta_ratio=ratio_arr, session_mean_theta_delta=session_mean, n_windows=len(times_arr), n_valid_windows=n_valid, bad_channel_result=bad_channel_result, motion_high_accel_df=motion_df_out, params=params)
+    params = dict(total_accel_threshold=total_accel_threshold, minimum_motion_bad_duration=minimum_motion_bad_duration, l_freq=l_freq, h_freq=eff_h_freq, h_freq_requested=h_freq, window_sec=window_sec, step_sec=step_sec, delta_band=tuple(delta_band), theta_band=tuple(theta_band), use_autoreject=use_autoreject, autoreject_epoch_sec=autoreject_epoch_sec, channel_agg=channel_agg, n_picks=int(picks.size))
+
+    return dict(times=times_arr, theta_delta_ratio=ratio_arr, session_mean_theta_delta=session_mean, n_windows=len(times_arr), n_valid_windows=n_valid, t0_unix=t0_unix, motion_high_accel_df=motion_df_out, params=params)
 
 
 class ThetaDeltaSleepIntrusionComputation(SpecificComputationBase):
@@ -306,78 +304,134 @@ class ThetaDeltaSleepIntrusionComputation(SpecificComputationBase):
     version: ClassVar[str] = "1"
     deps: ClassVar[Tuple[str, ...]] = ()
     artifact_kind: ClassVar[ArtifactKind] = ArtifactKind.stream
-    params_fingerprint_fn: ClassVar[Optional[Callable[[Mapping[str, Any]], str]]] = theta_delta_sleep_intrusion_params_fingerprint
 
 
     def compute(self, ctx: RunContext, params: Mapping[str, Any], dep_outputs: Mapping[str, Any]) -> Any:
         if ctx.raw is None:
             raise ValueError("ThetaDeltaSleepIntrusionComputation requires ctx.raw")
-        kw = filter_theta_delta_sleep_intrusion_params(params)
-        motion_df = kw.pop("motion_df", None)
-        return compute_theta_delta_sleep_intrusion_series(ctx.raw, motion_df=motion_df, **kw)
+        return compute_theta_delta_sleep_intrusion_series(ctx.raw, **dict(params))
 
 
-# Updates the Qt timeline after `adhd_ctx["out"]` exists: yellow theta/delta overlay on the EEG track + new docked ANALYSIS_theta_delta track (once).
+def apply_adhd_sleep_intrusion_to_timeline(timeline, result: Mapping[str, Any], *, eeg_name: str, eeg_ds: Any, t0: Optional[float] = None, show_left_axis: bool=True, show_bottom_axis: bool=False, show_title_label: bool=False) -> Tuple[Any, Any, Any]:
+    """Add or refresh the per-EEG theta/delta track on ``timeline`` from a compute result.
 
+    Track name is ``{eeg_ds.custom_datasource_name}_theta_delta`` (see
+    ``pypho_timeline.rendering.datasources.specific.eeg.theta_delta_track_key_for_eeg_datasource``).
 
-def apply_adhd_sleep_intrusion_to_timeline(timeline, adhd_ctx):
-    """ Usage: apply_adhd_sleep_intrusion_to_timeline(timeline, adhd_ctx) """
-    from datetime import datetime
+    When ``result.get('times_are_absolute_unix')`` is truthy, ``result['times']`` are already unix
+    seconds on the timeline axis and ``t0`` / ``t0_unix`` / ``earliest_unix_timestamp`` are not applied.
 
-    import pyqtgraph as pg
+    Otherwise ``t0`` resolution order: explicit kwarg > ``result['t0_unix']`` (raw ``meas_date`` from
+    the compute) > ``eeg_ds.earliest_unix_timestamp``.
+
+    Interval overview rows (``intervals_df`` on the datasource) carry only rectangle bounds for the track;
+    the plotted theta/delta series is stored in ``detailed_df`` (column ``t`` + ``theta_delta``), not
+    as columns on ``intervals_df``.
+    """
     from pypho_timeline.core.synchronized_plot_mode import SynchronizedPlotMode
-    from pypho_timeline.rendering.datasources.specific.eeg import EEGTrackDatasource
-    from pypho_timeline.utils.datetime_helpers import datetime_to_unix_timestamp, float_to_datetime
+    from pypho_timeline.rendering.datasources.specific.eeg import ThetaDeltaSleepIntrusionTrackDatasource, theta_delta_track_key_for_eeg_datasource
 
-    bottom_label_text: str = ''
-    out = adhd_ctx["out"]
-    if out is None:
-        print("Run the compute cell first.")
-        return
-    t0 = float(adhd_ctx["t0"])
-    x_abs = t0 + np.asarray(out["times"], dtype=float)
-    y = np.asarray(out["theta_delta_ratio"], dtype=float)
-    finite = np.isfinite(y)
-    ymax = float(np.nanpercentile(y[finite], 98)) if np.any(finite) else 1.0
-    if ymax <= 0:
-        ymax = 1.0
-    y_overlay = np.clip(y / ymax, 0.0, 1.0)
-    ew, _, _ = timeline.get_track_tuple(adhd_ctx["eeg_name"])
-    if ew is None:
-        print("Missing EEG widget for", adhd_ctx["eeg_name"])
-        return
-    eeg_pi = ew.getRootPlotItem()
-    if (not hasattr(timeline, "_adhd_theta_delta_overlay")) or (timeline._adhd_theta_delta_overlay is None):
-        timeline._adhd_theta_delta_overlay = pg.PlotDataItem(x=x_abs, y=y_overlay, pen=pg.mkPen("#ffcc00", width=2))
-        eeg_pi.addItem(timeline._adhd_theta_delta_overlay)
+    if eeg_ds is None:
+        raise ValueError("apply_adhd_sleep_intrusion_to_timeline requires eeg_ds (got None)")
+    if eeg_name is None:
+        raise ValueError("apply_adhd_sleep_intrusion_to_timeline requires eeg_name (got None)")
+
+    track_key = theta_delta_track_key_for_eeg_datasource(eeg_ds)
+    if result.get("times_are_absolute_unix"):
+        x_abs = np.asarray(result["times"], dtype=float)
+        logger.info("%s: using absolute unix times from merge (n=%s, t in [%.3f, %.3f]).", track_key, x_abs.size, float(np.nanmin(x_abs)) if x_abs.size else float("nan"), float(np.nanmax(x_abs)) if x_abs.size else float("nan"))
+    elif t0 is not None:
+        t0_eff: float = float(t0)
+        logger.info("%s: t0 from argument: %s", track_key, t0_eff)
+        x_abs = t0_eff + np.asarray(result["times"], dtype=float)
     else:
-        timeline._adhd_theta_delta_overlay.setData(x=x_abs, y=y_overlay)
-    analysis_name = "ANALYSIS_theta_delta"
-    if analysis_name in timeline.track_renderers:
-        print(analysis_name, "already present; overlay updated only.")
-        return
+        ru = result.get("t0_unix")
+        if ru is not None and np.isfinite(float(ru)):
+            t0_eff = float(ru)
+            logger.info("%s: t0 from result['t0_unix']: %s", track_key, t0_eff)
+        else:
+            eu = getattr(eeg_ds, "earliest_unix_timestamp", None)
+            if eu is None:
+                raise ValueError(f"{track_key}: cannot resolve t0 (no kwarg, result['t0_unix'], or eeg_ds.earliest_unix_timestamp)")
+            t0_eff = float(eu)
+            logger.warning("%s: no explicit t0 / valid result['t0_unix']; falling back to eeg_ds.earliest_unix_timestamp=%s", track_key, t0_eff)
+
+        x_abs = t0_eff + np.asarray(result["times"], dtype=float)
+    y = np.asarray(result["theta_delta_ratio"], dtype=float)
+
+    if x_abs.size and len(getattr(eeg_ds, "intervals_df", [])):
+        try:
+            t_series_lo, t_series_hi = float(np.nanmin(x_abs)), float(np.nanmax(x_abs))
+            for j in range(len(eeg_ds.intervals_df)):
+                iv = eeg_ds.intervals_df.iloc[j]
+                lo = interval_row_t_start_unix_seconds(iv)
+                hi = lo + float(iv["t_duration"])
+                overlap = t_series_hi >= lo - 1e-3 and t_series_lo <= hi + 1e-3
+                logger.info("%s: overlap interval[%s] t_start=%.3f t_end=%.3f vs series[%s,%s]: %s", track_key, j, lo, hi, t_series_lo, t_series_hi, overlap)
+                if not overlap:
+                    logger.warning("%s: no samples in theta/delta series overlap interval row %s (detail rects may be grey-only for that segment).", track_key, j)
+        except Exception as ex:
+            logger.debug("%s: interval vs series overlap check skipped: %s", track_key, ex)
+
     detailed = pd.DataFrame({"t": x_abs, "theta_delta": y})
-    ratio_ds = EEGTrackDatasource(intervals_df=adhd_ctx["eeg_ds"].intervals_df.copy(), eeg_df=detailed, custom_datasource_name=analysis_name, max_points_per_second=64.0, enable_downsampling=True, channel_names=["theta_delta"])
-    timeline.TrackRenderingMixin_on_buildUI()
-    track_widget, _root, plot_item, _dock = timeline.add_new_embedded_pyqtgraph_render_plot_widget(name=analysis_name, dockSize=(500, 80), dockAddLocationOpts=["bottom"], sync_mode=SynchronizedPlotMode.TO_GLOBAL_DATA)
-    if isinstance(timeline.total_data_start_time, (datetime, pd.Timestamp)):
-        plot_item.setXRange(datetime_to_unix_timestamp(timeline.total_data_start_time), datetime_to_unix_timestamp(timeline.total_data_end_time), padding=0)
-    elif timeline.reference_datetime is not None:
-        plot_item.setXRange(datetime_to_unix_timestamp(float_to_datetime(timeline.total_data_start_time, timeline.reference_datetime)), datetime_to_unix_timestamp(float_to_datetime(timeline.total_data_end_time, timeline.reference_datetime)), padding=0)
+    iv_theta = intervals_df_for_theta_delta_track(eeg_ds, result, log_prefix=track_key)
+
+    if track_key in timeline.track_renderers and hasattr(timeline, 'track_is_fully_attached') and timeline.track_is_fully_attached(track_key):
+        logger.info("%s: refreshing existing track.", track_key)
+        td_ratio_widget, td_ratio_track, td_ratio_ds = timeline.get_track_tuple(track_key)
+        td_ratio_ds.intervals_df = iv_theta.copy()
+        td_ratio_ds.detailed_df = detailed
+        td_ratio_ds.source_data_changed_signal.emit()
+        return (td_ratio_widget, td_ratio_track, td_ratio_ds)
+
+    if hasattr(timeline, 'teardown_orphaned_track'):
+        timeline.teardown_orphaned_track(track_key)
+
+    logger.info("%s: creating new track (n=%s, x_range=[%s, %s]).", track_key, len(detailed), x_abs.min() if x_abs.size else float("nan"), x_abs.max() if x_abs.size else float("nan"))
+    td_ratio_ds = ThetaDeltaSleepIntrusionTrackDatasource(intervals_df=iv_theta, eeg_df=detailed, custom_datasource_name=track_key, max_points_per_second=64.0, enable_downsampling=True, channel_names=["theta_delta"], normalize=True, normalize_over_full_data=True, plot_pen_colors=["#9467bd"], plot_pen_width=1.2, lab_obj_dict=getattr(eeg_ds, "lab_obj_dict", None), raw_datasets_dict=getattr(eeg_ds, "raw_datasets_dict", None))
+    td_ratio_widget, _root, ratio_plot_item, _ratio_dock = timeline.add_new_embedded_pyqtgraph_render_plot_widget(name=td_ratio_ds.custom_datasource_name, dockSize=(500, 60), dockAddLocationOpts=["bottom"], sync_mode=SynchronizedPlotMode.TO_GLOBAL_DATA)
+
+    ## Set range to same range as EEG track -- this should be good
+    ref_name = eeg_ds.custom_datasource_name
+    if ref_name in timeline.ui.matplotlib_view_widgets:
+        ref_plot = timeline.ui.matplotlib_view_widgets[ref_name].getRootPlotItem()
+        x0v, x1v = ref_plot.getViewBox().viewRange()[0]
+        ratio_plot_item.setXRange(x0v, x1v, padding=0)
+
+
+    if show_bottom_axis:
+        ratio_plot_item.setLabel("bottom", "Time (unix s)")
+        ratio_plot_item.showAxis("bottom")
     else:
-        plot_item.setXRange(float(timeline.total_data_start_time), float(timeline.total_data_end_time), padding=0)
-    plot_item.setLabel("bottom", bottom_label_text)
-    plot_item.setYRange(0, 1, padding=0.05)
-    plot_item.hideAxis("left")
-    timeline.add_track(ratio_ds, name=analysis_name, plot_item=plot_item)
-    track_widget.optionsPanel = track_widget.getOptionsPanel()
+        ratio_plot_item.hideAxis("bottom")
 
+    if show_title_label:
+        ratio_plot_item.setTitle("ADHD sleep intrusion series (theta / delta, NaN = motion/QC excluded)")
+    else:
+        ratio_plot_item.setTitle(None)
 
+    if show_left_axis:
+        ratio_plot_item.setLabel("left", "theta / delta (norm.)")
+        ratio_plot_item.showAxis("left")
+    else:
+        ratio_plot_item.hideAxis("left")
+    
+    # ratio_plot_item.setYRange(0, 1, padding=0.0)
+    timeline.add_track(td_ratio_ds, name=td_ratio_ds.custom_datasource_name, plot_item=ratio_plot_item)
+    td_ratio_widget.optionsPanel = td_ratio_widget.getOptionsPanel()
+
+    ## get the returned values:
+    td_ratio_widget, td_ratio_track, td_ratio_ds = timeline.get_track_tuple(td_ratio_ds.custom_datasource_name)
+    # detailed_td_ratio_df: pd.DataFrame = td_ratio_ds.detailed_df
+    return (td_ratio_widget, td_ratio_track, td_ratio_ds)
 
 __all__ = [
-    "THETA_DELTA_SLEEP_INTRUSION_PARAM_KEYS",
+    "ANALYSIS_TRACK_NAME",
     "ThetaDeltaSleepIntrusionComputation",
+    "apply_adhd_sleep_intrusion_to_timeline",
+    "compute_theta_delta_sleep_intrusion_merged_for_intervals",
     "compute_theta_delta_sleep_intrusion_series",
-    "filter_theta_delta_sleep_intrusion_params",
-    "theta_delta_sleep_intrusion_params_fingerprint",
+    "interval_row_t_start_unix_seconds",
+    "intervals_df_for_theta_delta_track",
+    "raw_relative_times_to_timeline_unix",
 ]

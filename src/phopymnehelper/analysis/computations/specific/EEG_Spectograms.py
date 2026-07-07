@@ -41,8 +41,8 @@ def eeg_spectrogram_params_fingerprint(params: Mapping[str, Any]) -> str:
     return json.dumps({k: f[k] for k in sorted(f.keys())}, sort_keys=True, default=str)
 
 
-def compute_raw_eeg_spectrogram(raw: mne.io.Raw, *, nperseg: int = DEFAULT_SPECTROGRAM_NPERSEG, noverlap: int = DEFAULT_SPECTROGRAM_NOVERLAP, picks: Any = None, mask_bad_annotated_times: bool = True) -> Dict[str, Any]:
-    """Compute continuous per-channel spectrogram; same defaults as timeline XDF processing."""
+def compute_raw_eeg_spectrogram(raw: mne.io.Raw, *, nperseg: int = DEFAULT_SPECTROGRAM_NPERSEG, noverlap: int = DEFAULT_SPECTROGRAM_NOVERLAP, picks: Any = None, mask_bad_annotated_times: bool = True) -> Optional[Dict[str, Any]]:
+    """Compute continuous per-channel spectrogram; same defaults as timeline XDF processing. Returns None when no EEG channels are available after exclusions."""
     return EEGComputations.raw_spectogram_working(raw, picks=picks, nperseg=nperseg, noverlap=noverlap, mask_bad_annotated_times=mask_bad_annotated_times)
 
 

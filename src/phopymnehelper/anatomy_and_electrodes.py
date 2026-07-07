@@ -110,6 +110,7 @@ class ElectrodeHelper:
         mont: DigMontage = mne.channels.make_dig_montage(ch_pos=ch_pos, nasion=fid.get("NAS"), lpa=fid.get("LPA"), rpa=fid.get("RPA"), coord_frame="head")
         return mont
 
+
     @staticmethod
     def _parse_ced(ced_file_path: Path) -> Dict[str, np.ndarray]:
         """Very tolerant .ced parser: returns dict[label] = np.array([x,y,z]) (units: unknown)."""

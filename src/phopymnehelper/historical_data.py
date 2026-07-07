@@ -782,8 +782,8 @@ class HistoricalData:
             recording_files=recording_files,
             cache_path=cache_path,
             max_workers=max_workers,
-            use_cache=True,
-            force_rebuild=False
+            # use_cache=True, force_rebuild=False,
+            use_cache=False, force_rebuild=True, ## Temporarily disables caching
         )
         
         # The DataFileMetadataParser already returns the correct format with:
