@@ -2225,7 +2225,7 @@ wheels = [
 
 [[package]]
 name = "phopylslhelper"
-version = "1.0.6"
+version = "1.0.7"
 source = { editable = "../PhoPyLSLhelper" }
 dependencies = [
     { name = "attrs" },
