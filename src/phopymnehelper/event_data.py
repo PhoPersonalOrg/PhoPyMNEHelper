@@ -258,19 +258,29 @@ class EventData(HistoricalData):
         ### 2. Dropping common error transcriptions, such as the empty transcript "..." or "Thanks for watching!".
         ### 3. Returning a valid dataframe containing all of the transcription data with real/proper absolute datetime timestamps.
         """
-        groups = all_WHISPER_df.groupby((all_WHISPER_df['description'] != all_WHISPER_df['description'].shift()).cumsum()) # grouped by 'description' value
-        results = []
-        for _, g in groups:
-            if len(g) > 1:
-                first, last = g.iloc[0], g.iloc[-1]
-                duration: float = last['onset'] - first['onset']
-                # results.append({'description': first['description'], 'start': first['onset'], 'end': last['onset'], 'duration': duration})
-                _additional_col_names = ['filepath', 'filename', WHISPER_idx_col_name, 'file_meas_date']
-                # _additional_cols = {'filepath': first['filepath'], 'filename': first['filename'], 'WHISPER_idx': first['WHISPER_idx'], 'file_meas_date': first['file_meas_date']}                
-                _additional_cols = {k:first[k] for k in _additional_col_names if (first.get(k, None) is not None)}
-                results.append({'onset': first['onset'], 'duration': duration, 'description': first['description'], **_additional_cols})
+        import polars as pl
 
-        dedup_WHISPER_df = pd.DataFrame(results)
+        _additional_col_names = ['filepath', 'filename', WHISPER_idx_col_name, 'file_meas_date']
+        available_additional_cols = [c for c in _additional_col_names if c in all_WHISPER_df.columns]
+
+        df = pl.from_pandas(all_WHISPER_df)
+
+        out = (
+            df.with_columns(
+                (pl.col("description") != pl.col("description").shift()).fill_null(True).cum_sum().alias("__group")
+            )
+            .group_by("__group", maintain_order=True)
+            .agg(
+                pl.col("onset").first().alias("onset"),
+                (pl.col("onset").last() - pl.col("onset").first()).alias("duration"),
+                pl.col("description").first().alias("description"),
+                *[pl.col(c).first().alias(c) for c in available_additional_cols],
+                pl.len().alias("__len")
+            )
+            .filter(pl.col("__len") > 1)
+            .drop("__group", "__len")
+        )
+        dedup_WHISPER_df = out.to_pandas()
         return dedup_WHISPER_df
 
     @classmethod
