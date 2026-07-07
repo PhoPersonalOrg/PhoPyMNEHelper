@@ -11,6 +11,8 @@ Public surfaces:
 - :func:`compute_frame_mental_states_from_raw` -- one MNE raw segment
 - :func:`compute_frame_mental_states_merged_for_intervals` -- multi-raw stitch (absolute unix)
 - :func:`apply_frame_mental_states_to_timeline` -- add/refresh mental-states track
+- :func:`compute_frame_mental_states_for_eeg_datasource` -- align raws from a timeline EEG datasource
+- :func:`start_frame_mental_states_track_background` -- non-blocking batch compute + Qt main-thread apply
 """
 
 from __future__ import annotations
@@ -158,6 +160,16 @@ class FrameMentalStatesComputation(SpecificComputationBase):
     deps: ClassVar[Tuple[str, ...]] = ()
     artifact_kind: ClassVar[ArtifactKind] = ArtifactKind.stream
 
+    @staticmethod
+    def _merged_power_from_filtered_block(block_2d: np.ndarray) -> float:
+        """Mean channel variance on already band-pass filtered data."""
+        if block_2d.size == 0:
+            return float("nan")
+        per_ch = np.nanvar(block_2d, axis=1)
+        if not np.any(np.isfinite(per_ch)):
+            return float("nan")
+        return float(np.nanmean(per_ch))
+
     @classmethod
     def _band_merged_power(
         cls,
@@ -170,12 +182,24 @@ class FrameMentalStatesComputation(SpecificComputationBase):
     ) -> float:
         """Band-pass each channel, variance per channel, mean across channels."""
         filtered = bandpass_filter_channels(block_2d, fmin, fmax, sfreq, filter_order, cache)
-        if filtered.size == 0:
-            return float("nan")
-        per_ch = np.nanvar(filtered, axis=1)
-        if not np.any(np.isfinite(per_ch)):
-            return float("nan")
-        return float(np.nanmean(per_ch))
+        return cls._merged_power_from_filtered_block(filtered)
+
+    @classmethod
+    def _prefilter_mental_state_bands(
+        cls,
+        data: np.ndarray,
+        sfreq: float,
+        filter_order: int,
+        cache: MutableMapping[Tuple[float, float, float], np.ndarray],
+    ) -> Optional[Dict[str, np.ndarray]]:
+        """Band-pass filter the full segment once per mental-state band."""
+        sf = float(sfreq)
+        band_filtered: Dict[str, np.ndarray] = {}
+        for band_name, (fmin, fmax) in FRAME_MENTAL_STATE_BANDS.items():
+            if fmin >= sf / 2.0:
+                return None
+            band_filtered[band_name] = bandpass_filter_channels(data, fmin, fmax, sf, filter_order, cache)
+        return band_filtered
 
     @classmethod
     def compute_frame_mental_states_series(
@@ -258,44 +282,43 @@ class FrameMentalStatesComputation(SpecificComputationBase):
             t_arr = np.arange(n_samp, dtype=float) / sf
 
         filter_cache: Dict[Tuple[float, float, float], np.ndarray] = {}
+        band_filtered = cls._prefilter_mental_state_bands(data, sf, filter_order, filter_cache)
         times_out: List[float] = []
         relaxation_out: List[float] = []
         focus_out: List[float] = []
         stress_out: List[float] = []
         drowsiness_out: List[float] = []
 
-        win_start = 0
-        while win_start + w <= n_samp:
-            center_idx = win_start + w // 2
-            t_center = float(t_arr[center_idx])
+        if band_filtered is not None:
+            win_start = 0
+            while win_start + w <= n_samp:
+                center_idx = win_start + w // 2
+                t_center = float(t_arr[center_idx])
 
-            if incremental and state.last_center_t is not None and t_center <= state.last_center_t + 1e-9:
+                if incremental and state.last_center_t is not None and t_center <= state.last_center_t + 1e-9:
+                    win_start += s
+                    continue
+
+                db_powers: Dict[str, float] = {}
+                skip_window = False
+                for band_name in FRAME_MENTAL_STATE_BANDS:
+                    block = band_filtered[band_name][:, win_start : win_start + w]
+                    merged = cls._merged_power_from_filtered_block(block)
+                    if not np.isfinite(merged):
+                        skip_window = True
+                        break
+                    db_powers[band_name] = state._db_normalize_band(band_name, merged)
+
+                if not skip_window and len(db_powers) == len(FRAME_MENTAL_STATE_BANDS):
+                    ms = state.mental_state_values(db_powers)
+                    times_out.append(t_center)
+                    relaxation_out.append(ms[MENTAL_STATE_RELAXATION])
+                    focus_out.append(ms[MENTAL_STATE_FOCUS])
+                    stress_out.append(ms[MENTAL_STATE_STRESS])
+                    drowsiness_out.append(ms[MENTAL_STATE_DROWSINESS])
+                    state.last_center_t = t_center
+
                 win_start += s
-                continue
-
-            block = data[:, win_start : win_start + w]
-            db_powers: Dict[str, float] = {}
-            skip_window = False
-            for band_name, (fmin, fmax) in FRAME_MENTAL_STATE_BANDS.items():
-                if fmin >= sf / 2.0:
-                    skip_window = True
-                    break
-                merged = cls._band_merged_power(block, fmin, fmax, sf, filter_order, filter_cache)
-                if not np.isfinite(merged):
-                    skip_window = True
-                    break
-                db_powers[band_name] = state._db_normalize_band(band_name, merged)
-
-            if not skip_window and len(db_powers) == len(FRAME_MENTAL_STATE_BANDS):
-                ms = state.mental_state_values(db_powers)
-                times_out.append(t_center)
-                relaxation_out.append(ms[MENTAL_STATE_RELAXATION])
-                focus_out.append(ms[MENTAL_STATE_FOCUS])
-                stress_out.append(ms[MENTAL_STATE_STRESS])
-                drowsiness_out.append(ms[MENTAL_STATE_DROWSINESS])
-                state.last_center_t = t_center
-
-            win_start += s
 
         times_arr = np.asarray(times_out, dtype=float)
         if viewport_t_min is not None and viewport_t_max is not None and times_arr.size:
@@ -553,6 +576,112 @@ compute_frame_mental_states_merged_for_intervals = FrameMentalStatesComputation.
 mental_states_colored_title_html = FrameMentalStatesComputation.mental_states_colored_title_html
 
 
+def compute_frame_mental_states_for_eeg_datasource(eeg_ds: Any, *, eeg_name: Optional[str] = None, **compute_kw: Any) -> Dict[str, Any]:
+    """Compute mental states from a timeline EEG datasource (live or offline with raws).
+
+    Returns ``{"live": True}`` for live LSL EEG, else ``{"live": False, "result": ...}``.
+    """
+    from pypho_timeline.rendering.datasources.specific.lsl import LiveEEGTrackDatasource
+    from pypho_timeline.rendering.datasources.track_datasource import RawProvidingTrackDatasource
+
+    if isinstance(eeg_ds, LiveEEGTrackDatasource):
+        return {"live": True}
+
+    label = eeg_name or getattr(eeg_ds, "custom_datasource_name", "EEG")
+    iv = getattr(eeg_ds, "intervals_df", None)
+    if iv is None or len(iv) == 0:
+        raise ValueError(f"{label}: no intervals_df (cannot align raws).")
+    rd = getattr(eeg_ds, "raw_datasets_dict", None)
+    raws_list, n_align = RawProvidingTrackDatasource.aligned_chronological_raws_for_intervals(
+        intervals_df=iv,
+        raw_datasets_dict=rd,
+    )
+    if not raws_list or n_align <= 0:
+        raise ValueError(f"{label}: no MNE Raw available.")
+    result = compute_frame_mental_states_merged_for_intervals(raws_list[:n_align], iv.iloc[:n_align], **compute_kw)
+    return {"live": False, "result": result}
+
+
+
+def start_frame_mental_states_track_background(timeline: Any, *, eeg_name: str, eeg_ds: Any, executor: Any = None,
+            on_complete: Optional[Any] = None, on_error: Optional[Any] = None,
+            **compute_kw: Any) -> Tuple[Any, Any]:
+    """Run mental-states batch compute off the Qt thread; apply the track on the main thread.
+
+    Parameters
+    ----------
+    executor
+        Optional shared :class:`concurrent.futures.Executor`. When omitted, a single-worker
+        :class:`concurrent.futures.ThreadPoolExecutor` is created and returned for reuse/shutdown.
+    on_complete
+        Optional ``callable(ms_widget, ms_track, ms_ds)`` after a successful apply.
+    on_error
+        Optional ``callable(exc)`` when compute or apply fails.
+
+    Returns
+    -------
+    future, executor
+        The submitted future and the executor instance (owned when not passed in).
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from qtpy import QtCore
+
+    from pypho_timeline.rendering.datasources.specific.eeg import mental_states_track_key_for_eeg_datasource
+
+    owned_executor = executor is None
+    ex = executor or ThreadPoolExecutor(max_workers=1)
+    track_key = mental_states_track_key_for_eeg_datasource(eeg_ds)
+    _ctx: Dict[str, Any] = {}
+
+    def _apply_track() -> None:
+        payload = _ctx.get("payload", {})
+        try:
+            if payload.get("live"):
+                applied = apply_frame_mental_states_to_timeline(timeline, eeg_name=eeg_name, eeg_ds=eeg_ds)
+            else:
+                result = payload["result"]
+                logger.info("%s: computed n_windows=%s", track_key, result.get("n_windows", 0))
+                applied = apply_frame_mental_states_to_timeline(timeline, result, eeg_name=eeg_name, eeg_ds=eeg_ds)
+            if on_complete is not None:
+                on_complete(*applied)
+        except Exception as exc:
+            if on_error is not None:
+                on_error(exc)
+            else:
+                logger.warning("%s: mental-states apply failed: %s", track_key, exc)
+    ## END def _apply_track() -> None...
+
+    def _on_done(fut: Any) -> None:
+        try:
+            _ctx["payload"] = fut.result()
+        except Exception as exc:
+            _ctx["error"] = exc
+            if on_error is not None:
+                QtCore.QTimer.singleShot(0, lambda: on_error(exc))
+            else:
+                logger.warning("%s: mental-states compute failed: %s", track_key, exc)
+            if owned_executor:
+                ex.shutdown(wait=False)
+            return
+
+        def _apply_and_maybe_shutdown() -> None:
+            _apply_track()
+            if owned_executor:
+                ex.shutdown(wait=False)
+
+        QtCore.QTimer.singleShot(0, _apply_and_maybe_shutdown)
+    ## END def _on_done(fut: Any) -> None...
+
+
+    fut = ex.submit(compute_frame_mental_states_for_eeg_datasource, eeg_ds, eeg_name=eeg_name, **compute_kw)
+    fut.add_done_callback(_on_done)
+    if owned_executor:
+        logger.debug("%s: started background mental-states compute (owned executor).", track_key)
+    else:
+        logger.debug("%s: started background mental-states compute.", track_key)
+    return fut, ex
+
+
 def apply_frame_mental_states_to_timeline(timeline, result: Optional[Mapping[str, Any]] = None, *, eeg_name: str, eeg_ds: Any, t0: Optional[float] = None, **kwargs) -> Tuple[Any, Any, Any]:
     """Add or refresh the per-EEG mental-states track on ``timeline``.
 
@@ -643,6 +772,8 @@ __all__ = [
     "MENTAL_STATE_STRESS",
     "MentalStatesRollingState",
     "apply_frame_mental_states_to_timeline",
+    "compute_frame_mental_states_for_eeg_datasource",
+    "start_frame_mental_states_track_background",
     "mental_states_colored_title_html",
     "compute_frame_mental_states_from_detailed_df",
     "compute_frame_mental_states_from_raw",
