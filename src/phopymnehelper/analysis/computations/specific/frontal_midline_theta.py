@@ -1,8 +1,8 @@
 """Frontal-midline theta (FMT) power (5–9 Hz) from EEG with optional motion masking.
 
-Sliding-window PSD over frontal-midline channels (Fz preferred; Emotiv AF3/AF4 proxy).
-Motion windows are excluded by intersecting against ``BAD_motion`` annotations derived from
-``motion_df`` (when provided). Optional autoreject masking is supported via
+Vectorized STFT band-power over frontal-midline channels (Fz preferred; Emotiv AF3/AF4 proxy).
+Motion windows are excluded via a sample-level mask derived from ``BAD_motion`` annotations
+(optional ``motion_df``). Optional autoreject masking is supported via
 :func:`phopymnehelper.analysis.computations.specific.bad_epochs.fit_autoreject_bad_sample_mask`.
 
 Primary spectral marker of prolonged wakefulness (Marzano et al., SLEEP 2013).
@@ -13,20 +13,13 @@ Public surfaces:
 - :func:`compute_frontal_midline_theta_merged_for_intervals` -- one row per aligned raw/interval → stitched dict
 - :class:`FrontalMidlineThetaComputation` -- DAG node wrapper for ``run_eeg_computations_graph``
 - :func:`apply_frontal_midline_theta_to_timeline` -- adds/refreshes the ``{eeg_ds_name}_frontal_midline_theta`` track
-
-Typical usage::
-
-    from phopymnehelper.analysis.computations.eeg_registry import run_eeg_computations_graph, session_fingerprint_for_raw_or_path
-    from phopymnehelper.analysis.computations.specific.frontal_midline_theta import apply_frontal_midline_theta_to_timeline
-
-    result = run_eeg_computations_graph(eeg_raw, session=session_fingerprint_for_raw_or_path(eeg_raw), goals=("frontal_midline_theta",))["frontal_midline_theta"]
-    apply_frontal_midline_theta_to_timeline(timeline, result, eeg_name=eeg_name, eeg_ds=eeg_ds)
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import time
 import warnings
 from typing import Any, Callable, ClassVar, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
@@ -51,7 +44,6 @@ DEFAULT_FMT_BAND: Tuple[float, float] = (5.0, 9.0)
 DEFAULT_FMT_L_FREQ: float = 4.0
 DEFAULT_FMT_H_FREQ: float = 12.0
 
-# Priority: exact midline Fz, then Emotiv AF3/AF4 proxy, then nearby frontal fallbacks.
 _FZ_NAMES: Tuple[str, ...] = ("FZ", "Fz", "fz")
 _AF_PAIR: Tuple[str, ...] = ("AF3", "AF4")
 _FRONTAL_FALLBACK: Tuple[str, ...] = ("FP1", "FP2", "F3", "F4", "Fp1", "Fp2")
@@ -83,7 +75,6 @@ def filter_frontal_midline_theta_params(params: Mapping[str, Any]) -> Dict[str, 
 
 def frontal_midline_theta_params_fingerprint(params: Mapping[str, Any]) -> str:
     f = filter_frontal_midline_theta_params(params)
-    # motion_df is not JSON-stable; fingerprint presence only
     if "motion_df" in f:
         f = dict(f)
         f["motion_df"] = f["motion_df"] is not None
@@ -91,13 +82,7 @@ def frontal_midline_theta_params_fingerprint(params: Mapping[str, Any]) -> str:
 
 
 def resolve_fmt_channel_picks(raw: mne.io.BaseRaw) -> Tuple[np.ndarray, List[str]]:
-    """Resolve frontal-midline channel indices and names for FMT power.
-
-    Priority:
-    1. FZ / Fz if present
-    2. Mean of available AF3 + AF4 (Emotiv midline proxy)
-    3. First available from FP1, FP2, F3, F4
-    """
+    """Resolve frontal-midline channel indices and names for FMT power."""
     name_to_idx = {ch: i for i, ch in enumerate(raw.ch_names)}
     bads = set(raw.info.get("bads") or [])
 
@@ -115,7 +100,6 @@ def resolve_fmt_channel_picks(raw: mne.io.BaseRaw) -> Tuple[np.ndarray, List[str
             return np.asarray([name_to_idx[fb]], dtype=int), [fb]
     ## END for fb in _FRONTAL_FALLBACK....
 
-    # Last resort: any good EEG channel
     picks = mne.pick_types(raw.info, eeg=True, exclude="bads")
     if picks.size > 0:
         names = [raw.ch_names[i] for i in picks[:1]]
@@ -123,27 +107,147 @@ def resolve_fmt_channel_picks(raw: mne.io.BaseRaw) -> Tuple[np.ndarray, List[str
     raise ValueError(f"No usable frontal-midline channels in raw (ch_names={list(raw.ch_names)}, bads={list(bads)})")
 
 
-def _psd(sig_2d: np.ndarray, sfreq: float) -> Tuple[np.ndarray, np.ndarray]:
-    try:
-        from mne.time_frequency import psd_array_multitaper
+def _merge_time_intervals(intervals: Sequence[Tuple[float, float]]) -> List[Tuple[float, float]]:
+    if not intervals:
+        return []
+    sorted_iv = sorted(intervals, key=lambda x: x[0])
+    merged: List[Tuple[float, float]] = [sorted_iv[0]]
+    for a0, a1 in sorted_iv[1:]:
+        last_a0, last_a1 = merged[-1]
+        if a0 <= last_a1:
+            merged[-1] = (last_a0, max(last_a1, a1))
+        else:
+            merged.append((a0, a1))
+    ## END for a0, a1 in sorted_iv[1:]....
 
-        out = psd_array_multitaper(sig_2d, sfreq, adaptive=True, verbose="ERROR")
-        return np.asarray(out[0]), np.asarray(out[1])
-    except Exception:
-        n = sig_2d.shape[1]
-        nperseg = min(int(sfreq * 2), n) if n >= 8 else n
-        if nperseg < 4:
-            raise
-        freqs, psd = signal.welch(sig_2d, fs=sfreq, nperseg=nperseg, axis=-1, detrend="linear")
-        return psd, freqs
+    return merged
 
 
-def _bandpower(psd_1d: np.ndarray, freqs: np.ndarray, band: Tuple[float, float]) -> float:
-    lo, hi = band
-    m = (freqs >= lo) & (freqs <= hi)
-    if not np.any(m):
-        return float("nan")
-    return float(np.trapz(psd_1d[m], freqs[m]))
+def _motion_intervals_from_annotations(raw: mne.io.BaseRaw) -> List[Tuple[float, float]]:
+    annots = raw.annotations
+    motion_intervals: List[Tuple[float, float]] = []
+    if annots is None or len(annots) == 0:
+        return motion_intervals
+    for k in range(len(annots)):
+        desc = str(annots.description[k])
+        if MOTION_BAD_DESC not in desc:
+            continue
+        t0_a = float(annots.onset[k])
+        motion_intervals.append((t0_a, t0_a + float(annots.duration[k])))
+    ## END for k in range(len(annots))....
+
+    return _merge_time_intervals(motion_intervals)
+
+
+def _build_sample_bad_mask(
+    n_times: int,
+    sfreq: float,
+    motion_intervals: Sequence[Tuple[float, float]],
+    ar_mask: Optional[np.ndarray],
+) -> np.ndarray:
+    sample_mask = np.zeros(n_times, dtype=bool)
+    if ar_mask is not None:
+        n_ar = min(n_times, int(ar_mask.size))
+        sample_mask[:n_ar] |= ar_mask[:n_ar]
+    for a0, a1 in motion_intervals:
+        i0 = max(0, int(np.floor(a0 * sfreq)))
+        i1 = min(n_times, int(np.ceil(a1 * sfreq)))
+        if i1 > i0:
+            sample_mask[i0:i1] = True
+    ## END for a0, a1 in motion_intervals....
+
+    return sample_mask
+
+
+def _mask_stft_bins_from_sample_mask(
+    t_bins: np.ndarray,
+    power: np.ndarray,
+    *,
+    sfreq: float,
+    window_sec: float,
+    n_times: int,
+    sample_mask: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Set STFT bin power to NaN when any sample in the bin's window is bad."""
+    if t_bins.size == 0:
+        return np.array([], dtype=float), np.array([], dtype=float)
+    nperseg = max(8, int(window_sec * sfreq))
+    power_out = np.asarray(power, dtype=float).copy()
+    for j in range(power_out.size):
+        s0 = max(0, int(np.floor(float(t_bins[j]) * sfreq)))
+        s1 = min(n_times, s0 + nperseg)
+        if s1 > s0 and bool(sample_mask[s0:s1].any()):
+            power_out[j] = float("nan")
+    ## END for j in range(power_out.size)....
+
+    times = t_bins + window_sec / 2.0
+    return times, power_out
+
+
+def _fmt_series_stats_pl(times: np.ndarray, power: np.ndarray) -> Tuple[np.ndarray, np.ndarray, int, float]:
+    """Aggregate FMT series stats via Polars; return arrays plus n_valid and session mean."""
+    import polars as pl
+
+    df = pl.DataFrame({"t": times, "fmt_power": power})
+    finite = df.filter(pl.col("fmt_power").is_finite())
+    n_valid = int(finite.height)
+    if n_valid == 0:
+        return times, power, 0, float("nan")
+    session_mean = float(finite.select(pl.col("fmt_power").mean()).item())
+    return times, power, n_valid, session_mean
+
+
+def _vectorized_fmt_power_series(
+    sig: np.ndarray,
+    *,
+    sfreq: float,
+    window_sec: float,
+    step_sec: float,
+    fmt_band: Tuple[float, float],
+    sample_mask: np.ndarray,
+    n_times: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """One-pass STFT band integration for FMT power (5–9 Hz default)."""
+    nperseg = max(8, int(window_sec * sfreq))
+    if sig.size < nperseg:
+        empty = np.array([], dtype=float)
+        return empty, empty
+
+    noverlap = max(0, nperseg - int(step_sec * sfreq))
+    freqs, t_bins, sxx = signal.spectrogram(sig, fs=sfreq, nperseg=nperseg, noverlap=noverlap, detrend="linear")
+    lo, hi = fmt_band
+    band_mask = (freqs >= lo) & (freqs <= hi)
+    if not np.any(band_mask):
+        power = np.full(t_bins.size, np.nan, dtype=float)
+    else:
+        power = np.trapz(sxx[band_mask, :], freqs[band_mask], axis=0)
+
+    times = t_bins + window_sec / 2.0
+    return _mask_stft_bins_from_sample_mask(
+        t_bins,
+        power,
+        sfreq=sfreq,
+        window_sec=window_sec,
+        n_times=n_times,
+        sample_mask=sample_mask,
+    )
+
+
+def _slice_motion_df_for_interval(
+    motion_pl: Any,
+    *,
+    t_lo: float,
+    t_hi: float,
+) -> Optional[pd.DataFrame]:
+    """Slice a Polars motion table to an interval's unix time range; return pandas for MotionData API."""
+    import polars as pl
+
+    if motion_pl is None:
+        return None
+    sliced = motion_pl.filter(pl.col("t").is_between(float(t_lo), float(t_hi), closed="both"))
+    if sliced.is_empty():
+        return None
+    return sliced.to_pandas()
 
 
 def compute_frontal_midline_theta_merged_for_intervals(
@@ -153,12 +257,9 @@ def compute_frontal_midline_theta_merged_for_intervals(
     motion_df: Optional[pd.DataFrame] = None,
     **compute_kw: Any,
 ) -> Dict[str, Any]:
-    """Run :func:`compute_frontal_midline_theta_series` per raw, stitch into one absolute-time series.
+    """Run :func:`compute_frontal_midline_theta_series` per raw, stitch into one absolute-time series."""
+    import polars as pl
 
-    Assumes ``raws[i]`` corresponds to ``intervals_df.iloc[i]``. Returned ``times`` are
-    **absolute unix seconds**; set ``times_are_absolute_unix`` so
-    :func:`apply_frontal_midline_theta_to_timeline` does not add ``t0`` again.
-    """
     n_iv = len(intervals_df)
     n_raw = len(raws)
     n = min(n_raw, n_iv)
@@ -167,17 +268,31 @@ def compute_frontal_midline_theta_merged_for_intervals(
     if n == 0:
         raise ValueError("compute_frontal_midline_theta_merged_for_intervals: no raw/interval pairs (empty inputs).")
 
+    motion_pl = pl.from_pandas(motion_df) if motion_df is not None else None
+    merge_kw = dict(compute_kw)
+    merge_kw.setdefault("copy_raw", False)
+
     all_t: List[np.ndarray] = []
     all_y: List[np.ndarray] = []
     last_params: Optional[Dict[str, Any]] = None
     motion_df_out_last: Optional[pd.DataFrame] = None
 
     for i in range(n):
+        seg_t0 = time.perf_counter()
         raw = raws[i]
         iv = intervals_df.iloc[i]
         anchor = interval_row_t_start_unix_seconds(iv)
+        t_end_iv = anchor + float(iv["t_duration"])
         raw_t0 = float(np.asarray(raw.times)[0]) if len(raw.times) > 0 else 0.0
-        sub = compute_frontal_midline_theta_series(raw, motion_df=motion_df, meas_date=raw.info.get("meas_date"), **compute_kw)
+
+        segment_motion = _slice_motion_df_for_interval(motion_pl, t_lo=anchor, t_hi=t_end_iv)
+
+        sub = compute_frontal_midline_theta_series(
+            raw,
+            motion_df=segment_motion,
+            meas_date=raw.info.get("meas_date"),
+            **merge_kw,
+        )
         t_rel = np.asarray(sub["times"], dtype=float)
         y = np.asarray(sub["fmt_power"], dtype=float)
         t_abs = raw_relative_times_to_timeline_unix(t_rel, interval_t_start_unix=anchor, raw_times_first=raw_t0)
@@ -187,27 +302,29 @@ def compute_frontal_midline_theta_merged_for_intervals(
         if sub.get("motion_high_accel_df") is not None:
             motion_df_out_last = sub["motion_high_accel_df"]
 
-        t_end_iv = anchor + float(iv["t_duration"])
+        elapsed = time.perf_counter() - seg_t0
         if t_abs.size:
             t_min, t_max = float(np.nanmin(t_abs)), float(np.nanmax(t_abs))
             logger.info(
-                "fmt segment %s/%s: interval t_start=%.3f t_end~=%.3f | series t [%.3f, %.3f] (n=%s)",
+                "fmt segment %s/%s done in %.2fs (n_windows=%s): interval t_start=%.3f t_end~=%.3f | series t [%.3f, %.3f]",
                 i + 1,
                 n,
+                elapsed,
+                t_abs.size,
                 anchor,
                 t_end_iv,
                 t_min,
                 t_max,
-                t_abs.size,
             )
             if t_max < anchor - 1.0 or t_min > t_end_iv + 1.0:
                 logger.warning("fmt segment %s: series unix range may not overlap interval bounds (check t_start vs raw).", i + 1)
+        else:
+            logger.info("fmt segment %s/%s done in %.2fs (n_windows=0).", i + 1, n, elapsed)
         ## END for i in range(n)....
 
     times_out = np.concatenate(all_t) if len(all_t) > 1 else all_t[0]
     power_out = np.concatenate(all_y) if len(all_y) > 1 else all_y[0]
-    n_valid = int(np.sum(np.isfinite(power_out)))
-    session_mean = float(np.nanmean(power_out)) if n_valid > 0 else float("nan")
+    _, _, n_valid, session_mean = _fmt_series_stats_pl(times_out, power_out)
 
     return dict(
         times=times_out,
@@ -241,14 +358,13 @@ def compute_frontal_midline_theta_series(
     channel_agg: str = "mean",
     copy_raw: bool = True,
 ) -> Dict[str, Any]:
-    """Compute sliding-window frontal-midline theta band power (default 5–9 Hz).
-
-    Returns a flat dict with ``times``, ``fmt_power``, ``session_mean_fmt_power``,
-    ``n_windows``, ``n_valid_windows``, ``motion_high_accel_df``, ``params``.
-    """
+    """Compute sliding-window frontal-midline theta band power (default 5–9 Hz) via vectorized STFT."""
     if channel_agg not in ("mean", "median"):
         raise ValueError("channel_agg must be 'mean' or 'median'")
+    if window_sec <= 0 or step_sec <= 0:
+        raise ValueError("window_sec and step_sec must be positive")
 
+    t_compute0 = time.perf_counter()
     raw = raw_eeg.copy() if copy_raw else raw_eeg
     raw.load_data()
 
@@ -274,7 +390,6 @@ def compute_frontal_midline_theta_series(
         raw.set_annotations(motion_annots if (cur is None or len(cur) == 0) else cur + motion_annots)
 
     picks, fmt_channels = resolve_fmt_channel_picks(raw)
-    # Bandpass only the selected channels for efficiency
     raw.filter(l_freq=l_freq, h_freq=eff_h_freq, picks=picks, verbose=False)
 
     ar_mask: Optional[np.ndarray] = (
@@ -285,69 +400,25 @@ def compute_frontal_midline_theta_series(
 
     sfreq = float(raw.info["sfreq"])
     n_times = int(raw.n_times)
-    tmax = float(raw.times[-1])
+    motion_intervals = _motion_intervals_from_annotations(raw)
+    sample_mask = _build_sample_bad_mask(n_times, sfreq, motion_intervals, ar_mask)
 
-    annots = raw.annotations
-    motion_intervals: list = []
-    if annots is not None and len(annots) > 0:
-        for k in range(len(annots)):
-            desc = str(annots.description[k])
-            if MOTION_BAD_DESC not in desc:
-                continue
-            t0_a = float(annots.onset[k])
-            motion_intervals.append((t0_a, t0_a + float(annots.duration[k])))
-        ## END for k in range(len(annots))....
+    block = raw.get_data(picks=picks)
+    if channel_agg == "mean":
+        sig = np.mean(block, axis=0)
+    else:
+        sig = np.median(block, axis=0)
 
-    if window_sec <= 0 or step_sec <= 0:
-        raise ValueError("window_sec and step_sec must be positive")
-
-    times_list: list = []
-    power_list: list = []
-    min_samples = max(8, int(0.5 * window_sec * sfreq))
-    t0 = 0.0
-    while t0 + window_sec <= tmax + 1e-9:
-        t1 = t0 + window_sec
-        tc = 0.5 * (t0 + t1)
-        times_list.append(tc)
-
-        hits_motion = any((t0 < a1 and t1 > a0) for a0, a1 in motion_intervals)
-        if hits_motion:
-            power_list.append(float("nan"))
-            t0 += step_sec
-            continue
-
-        if ar_mask is not None:
-            i0 = max(0, int(np.floor(t0 * sfreq)))
-            i1 = min(n_times, int(np.ceil(t1 * sfreq)))
-            if i1 > i0 and bool(np.any(ar_mask[i0:i1])):
-                power_list.append(float("nan"))
-                t0 += step_sec
-                continue
-
-        s0 = max(0, int(np.floor(t0 * sfreq)))
-        s1 = min(n_times, int(np.ceil(t1 * sfreq)))
-        if s1 - s0 < min_samples:
-            power_list.append(float("nan"))
-            t0 += step_sec
-            continue
-
-        block = raw.get_data(picks=picks, start=s0, stop=s1)
-        agg = np.mean(block, axis=0, keepdims=True) if channel_agg == "mean" else np.median(block, axis=0, keepdims=True)
-        try:
-            psd, freqs = _psd(agg, sfreq)
-        except Exception:
-            power_list.append(float("nan"))
-            t0 += step_sec
-            continue
-
-        p_fmt = _bandpower(psd[0], freqs, fmt_band)
-        power_list.append(p_fmt if np.isfinite(p_fmt) else float("nan"))
-        t0 += step_sec
-
-    times_arr = np.asarray(times_list, dtype=float)
-    power_arr = np.asarray(power_list, dtype=float)
-    n_valid = int(np.sum(np.isfinite(power_arr)))
-    session_mean = float(np.nanmean(power_arr)) if n_valid > 0 else float("nan")
+    times_arr, power_arr = _vectorized_fmt_power_series(
+        sig,
+        sfreq=sfreq,
+        window_sec=window_sec,
+        step_sec=step_sec,
+        fmt_band=fmt_band,
+        sample_mask=sample_mask,
+        n_times=n_times,
+    )
+    times_arr, power_arr, n_valid, session_mean = _fmt_series_stats_pl(times_arr, power_arr)
 
     md = raw.info.get("meas_date")
     t0_unix: Optional[float] = None
@@ -371,6 +442,15 @@ def compute_frontal_midline_theta_series(
         channel_agg=channel_agg,
         fmt_channels=list(fmt_channels),
         n_picks=int(picks.size),
+        compute_engine="stft_spectrogram",
+    )
+
+    logger.debug(
+        "compute_frontal_midline_theta_series: %.2fs, n_windows=%s, n_valid=%s, channels=%s",
+        time.perf_counter() - t_compute0,
+        len(times_arr),
+        n_valid,
+        fmt_channels,
     )
 
     return dict(
@@ -398,7 +478,6 @@ class FrontalMidlineThetaComputation(SpecificComputationBase):
         kw = filter_frontal_midline_theta_params(params)
         kw.pop("t0", None)
         kw.pop("motion_df", None)
-        # motion_df may still be passed via params for direct callers; prefer explicit if present
         motion_df = params.get("motion_df")
         return compute_frontal_midline_theta_series(ctx.raw, motion_df=motion_df, **{k: v for k, v in kw.items() if k != "motion_df"})
 
@@ -414,10 +493,9 @@ def apply_frontal_midline_theta_to_timeline(
     show_bottom_axis: bool = False,
     show_title_label: bool = False,
 ) -> Tuple[Any, Any, Any]:
-    """Add or refresh the per-EEG frontal-midline theta track on ``timeline`` from a compute result.
+    """Add or refresh the per-EEG frontal-midline theta track on ``timeline`` from a compute result."""
+    import polars as pl
 
-    Track name is ``{eeg_ds.custom_datasource_name}_frontal_midline_theta``.
-    """
     from pypho_timeline.core.synchronized_plot_mode import SynchronizedPlotMode
     from pypho_timeline.rendering.datasources.specific.eeg import (
         FrontalMidlineThetaTrackDatasource,
@@ -482,11 +560,11 @@ def apply_frontal_midline_theta_to_timeline(
                         track_key,
                         j,
                     )
-                ## END for j in range(len(eeg_ds.intervals_df))....
+            ## END for j in range(len(eeg_ds.intervals_df))....
         except Exception as ex:
             logger.debug("%s: interval vs series overlap check skipped: %s", track_key, ex)
 
-    detailed = pd.DataFrame({"t": x_abs, "fmt_power": y})
+    detailed = pl.DataFrame({"t": x_abs, "fmt_power": y}).to_pandas()
     iv_fmt = intervals_df_for_theta_delta_track(eeg_ds, result, log_prefix=track_key)
 
     if track_key in timeline.track_renderers and hasattr(timeline, "track_is_fully_attached") and timeline.track_is_fully_attached(track_key):

@@ -1,8 +1,12 @@
+import time
+
 import mne
 import numpy as np
+import pandas as pd
 import pytest
 
 from phopymnehelper.analysis.computations.specific.frontal_midline_theta import (
+    compute_frontal_midline_theta_merged_for_intervals,
     compute_frontal_midline_theta_series,
     filter_frontal_midline_theta_params,
     frontal_midline_theta_params_fingerprint,
@@ -33,6 +37,7 @@ def test_compute_frontal_midline_theta_series_keys_and_finite():
     assert result["n_valid_windows"] > 0
     assert np.sum(np.isfinite(result["fmt_power"])) > 0
     assert set(result["params"]["fmt_channels"]) == {"AF3", "AF4"}
+    assert result["params"].get("compute_engine") == "stft_spectrogram"
 
 
 def test_resolve_fmt_channel_picks_prefers_fz():
@@ -66,3 +71,41 @@ def test_filter_and_fingerprint_strip_unknown_keys():
     fp1 = frontal_midline_theta_params_fingerprint({"window_sec": 4.0, "step_sec": 1.0})
     fp2 = frontal_midline_theta_params_fingerprint({"step_sec": 1.0, "window_sec": 4.0})
     assert fp1 == fp2
+
+
+def test_compute_frontal_midline_theta_series_performance_budget():
+    raw = _make_raw(["AF3", "AF4"], duration_sec=600.0, sfreq=256.0)
+    t0 = time.monotonic()
+    result = compute_frontal_midline_theta_series(raw, window_sec=4.0, step_sec=1.0)
+    elapsed = time.monotonic() - t0
+    assert elapsed < 3.0, f"FMT compute took {elapsed:.2f}s (budget 3s)"
+    assert result["n_windows"] > 0
+    assert result["n_valid_windows"] > 0
+
+
+def test_merge_with_motion_df_slice():
+    raw_a = _make_raw(["AF3", "AF4"], duration_sec=30.0)
+    raw_b = _make_raw(["AF3", "AF4"], duration_sec=30.0)
+    intervals_df = pd.DataFrame(
+        {
+            "t_start": [1000.0, 1100.0],
+            "t_duration": [30.0, 30.0],
+        }
+    )
+    motion_df = pd.DataFrame(
+        {
+            "t": np.linspace(1000.0, 1130.0, 500),
+            "AccX": np.zeros(500),
+            "AccY": np.zeros(500),
+            "AccZ": np.ones(500) * 0.01,
+        }
+    )
+    result = compute_frontal_midline_theta_merged_for_intervals(
+        [raw_a, raw_b],
+        intervals_df,
+        motion_df=motion_df,
+    )
+    assert result["times_are_absolute_unix"] is True
+    assert result["merged_n_segments"] == 2
+    assert len(result["times"]) == len(result["fmt_power"])
+    assert result["n_windows"] > 0
