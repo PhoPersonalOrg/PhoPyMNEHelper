@@ -70,6 +70,8 @@ MENTAL_STATE_LINE_COLORS: Dict[str, str] = {
 }
 
 MENTAL_STATE_LINE_WIDTH: float = 0.6
+MENTAL_STATES_TITLE_FONT_SIZE: str = "4pt"
+MENTAL_STATES_TITLE_ROW_HEIGHT_PX: int = 10
 
 MENTAL_STATE_DISPLAY_NAMES: Dict[str, str] = {
     MENTAL_STATE_RELAXATION: "relaxation",
@@ -618,8 +620,14 @@ class FrameMentalStatesComputation(SpecificComputationBase):
 
     @classmethod
     def _apply_mental_states_plot_chrome(cls, ms_plot_item: Any, *, y_max: float) -> None:
-        """Hide axes and apply the colored multi-lane title."""
-        ms_plot_item.setTitle(cls.mental_states_colored_title_html())
+        """Hide axes and apply the compact colored overlay title."""
+        ms_plot_item.setTitle(cls.mental_states_colored_title_html(), size=MENTAL_STATES_TITLE_FONT_SIZE)
+        title_label = getattr(ms_plot_item, "titleLabel", None)
+        if title_label is not None:
+            title_label.setMaximumHeight(MENTAL_STATES_TITLE_ROW_HEIGHT_PX)
+        layout = getattr(ms_plot_item, "layout", None)
+        if layout is not None and hasattr(layout, "setRowFixedHeight"):
+            layout.setRowFixedHeight(0, MENTAL_STATES_TITLE_ROW_HEIGHT_PX)
         ms_plot_item.setYRange(0, y_max, padding=0.02)
         ms_plot_item.hideAxis("left")
         ms_plot_item.hideAxis("bottom")
@@ -669,7 +677,7 @@ class FrameMentalStatesComputation(SpecificComputationBase):
             ref_plot = timeline.ui.matplotlib_view_widgets[ref_name].getRootPlotItem()
             x0v, x1v = ref_plot.getViewBox().viewRange()[0]
             ms_plot_item.setXRange(x0v, x1v, padding=0)
-        y_max = MentalStatesDetailRenderer.default_overview_series_height()
+        y_max = MentalStatesDetailRenderer.Y_MAX
         cls._apply_mental_states_plot_chrome(ms_plot_item, y_max=y_max)
         timeline.add_track(ms_ds, name=ms_ds.custom_datasource_name, plot_item=ms_plot_item)
         ms_widget.optionsPanel = ms_widget.getOptionsPanel()
@@ -834,7 +842,7 @@ def apply_frame_mental_states_to_timeline(timeline, result: Optional[Mapping[str
         ms_ds.source_data_changed_signal.emit()
         if ms_widget is not None and hasattr(ms_widget, "getRootPlotItem"):
             from pypho_timeline.rendering.datasources.specific.eeg import MentalStatesDetailRenderer
-            FrameMentalStatesComputation._apply_mental_states_plot_chrome(ms_widget.getRootPlotItem(), y_max=MentalStatesDetailRenderer.default_overview_series_height())
+            FrameMentalStatesComputation._apply_mental_states_plot_chrome(ms_widget.getRootPlotItem(), y_max=MentalStatesDetailRenderer.Y_MAX)
         return (ms_widget, ms_track, ms_ds)
 
     if hasattr(timeline, "teardown_orphaned_track"):
