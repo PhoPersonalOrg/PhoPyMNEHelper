@@ -740,7 +740,7 @@ class HistoricalData:
 
 
     @classmethod
-    def build_file_comparison_df(cls, recording_files: List[Path], max_workers: int = 3) -> pd.DataFrame:
+    def build_file_comparison_df(cls, recording_files: List[Path], max_workers: int = 3, use_cache: bool = True, force_rebuild: bool = False) -> pd.DataFrame:
         """ returns a dataframe with info about each file such as their modification time, etc
         
         Processes files in parallel using ThreadPoolExecutor for improved performance.
@@ -749,6 +749,8 @@ class HistoricalData:
         Args:
             recording_files: List of Path objects to recording files
             max_workers: Maximum number of parallel threads (default: 3)
+            use_cache: If True, reuse on-disk metadata for unchanged files (default: True)
+            force_rebuild: If True, ignore cache hits and re-extract metadata (default: False)
         
         Usage:
         
@@ -773,17 +775,14 @@ class HistoricalData:
         """
         if not recording_files:
             return pd.DataFrame()
-        
-        # Determine cache path (use first file's parent directory)
-        cache_path = recording_files[0].parent / "_data_file_metadata_cache.csv"
-        
-        # Use DataFileMetadataParser for cache-backed processing
+
+        # Per-parent cache paths are resolved inside DataFileMetadataParser when cache_path is None.
         df = DataFileMetadataParser.build_file_comparison_df_cached(
             recording_files=recording_files,
-            cache_path=cache_path,
+            cache_path=None,
             max_workers=max_workers,
-            # use_cache=True, force_rebuild=False,
-            use_cache=False, force_rebuild=True, ## Temporarily disables caching
+            use_cache=True, force_rebuild=False,
+            # use_cache=False, force_rebuild=True, ## Temporarily disables caching
         )
         
         # The DataFileMetadataParser already returns the correct format with:
