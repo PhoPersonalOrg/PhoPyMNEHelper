@@ -26,13 +26,9 @@ import mne
 import numpy as np
 import pandas as pd
 
-from phopymnehelper.analysis.computations.gfp_band_power import bandpass_filter_channels
+from phopymnehelper.analysis.computations.gfp_band_power import GFPBandPower
 from phopymnehelper.analysis.computations.protocol import ArtifactKind, RunContext
-from phopymnehelper.analysis.computations.specific.ADHD_sleep_intrusions import (
-    interval_row_t_start_unix_seconds,
-    intervals_df_for_theta_delta_track,
-    raw_relative_times_to_timeline_unix,
-)
+from phopymnehelper.analysis.computations.specific.ADHD_sleep_intrusions import ThetaDeltaSleepIntrusionComputation
 from phopymnehelper.analysis.computations.specific.base import SpecificComputationBase
 
 logger = logging.getLogger(__name__)
@@ -183,7 +179,7 @@ class FrameMentalStatesComputation(SpecificComputationBase):
         cache: MutableMapping[Tuple[float, float, float], np.ndarray],
     ) -> float:
         """Band-pass each channel, variance per channel, mean across channels."""
-        filtered = bandpass_filter_channels(block_2d, fmin, fmax, sfreq, filter_order, cache)
+        filtered = GFPBandPower.bandpass_filter_channels(block_2d, fmin, fmax, sfreq, filter_order, cache)
         return cls._merged_power_from_filtered_block(filtered)
 
     @classmethod
@@ -200,7 +196,7 @@ class FrameMentalStatesComputation(SpecificComputationBase):
         for band_name, (fmin, fmax) in FRAME_MENTAL_STATE_BANDS.items():
             if fmin >= sf / 2.0:
                 return None
-            band_filtered[band_name] = bandpass_filter_channels(data, fmin, fmax, sf, filter_order, cache)
+            band_filtered[band_name] = GFPBandPower.bandpass_filter_channels(data, fmin, fmax, sf, filter_order, cache)
         return band_filtered
 
     @classmethod
@@ -581,12 +577,12 @@ class FrameMentalStatesComputation(SpecificComputationBase):
         for i in range(n):
             raw = raws[i]
             iv = intervals_df.iloc[i]
-            anchor = interval_row_t_start_unix_seconds(iv)
+            anchor = ThetaDeltaSleepIntrusionComputation.interval_row_t_start_unix_seconds(iv)
             raw_t0 = float(np.asarray(raw.times)[0]) if len(raw.times) > 0 else 0.0
             sub = cls.compute_frame_mental_states_from_raw(raw, state=state, **compute_kw)
             state = sub["state"]
             t_rel = np.asarray(sub["times"], dtype=float)
-            t_abs = raw_relative_times_to_timeline_unix(t_rel, interval_t_start_unix=anchor, raw_times_first=raw_t0)
+            t_abs = ThetaDeltaSleepIntrusionComputation.raw_relative_times_to_timeline_unix(t_rel, interval_t_start_unix=anchor, raw_times_first=raw_t0)
             all_t.append(t_abs)
             for c in MENTAL_STATE_COLUMNS:
                 series_cols[c].append(np.asarray(sub[c], dtype=float))

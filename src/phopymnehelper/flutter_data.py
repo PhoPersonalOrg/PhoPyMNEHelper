@@ -41,6 +41,7 @@ class GenericRawDebugFileProcessor:
     CAPTURES: emotiv_epoc_x
 
     from phopymnehelper.historical_data import GenericRawDebugFileProcessor
+    from phopymnehelper.flutter_data import GenericRawDebugFileProcessor
 
     """
     # line_length_to_modality_dict = {65: 'MOTION', 85: 'EEG'}

@@ -1,7 +1,4 @@
-"""Registered EEG computation nodes wrapping EEGComputations (DAG + shared params)."""
-
 from __future__ import annotations
-
 from pathlib import Path
 from typing import Any, Dict, Literal, Mapping, Optional, Sequence, Tuple, TypeAlias
 
@@ -27,32 +24,6 @@ _EEG_NODES_REGISTERED = False
 
 
 """Registered EEG computation nodes wrapping EEGComputations (DAG + shared params)."""
-
-from __future__ import annotations
-
-from pathlib import Path
-from typing import Any, Dict, Literal, Mapping, Optional, Sequence, Tuple, TypeAlias
-
-import phopymnehelper.type_aliases as types
-from phopymnehelper.EEG_data import EEGComputations
-from phopymnehelper.analysis.computations.cache import DiskComputationCache
-from phopymnehelper.analysis.computations.engine import GraphExecutor
-from phopymnehelper.analysis.computations.protocol import DEFAULT_REGISTRY, ArtifactKind, ComputationNode, ComputationRegistry, RunContext, SessionFingerprint
-from phopymnehelper.analysis.computations.specific.ADHD_sleep_intrusions import ThetaDeltaSleepIntrusionComputation
-from phopymnehelper.analysis.computations.specific.bad_epochs import BadEpochsQCComputation
-from phopymnehelper.analysis.computations.specific.EEG_Spectograms import EEGSpectrogramComputation
-from phopymnehelper.analysis.computations.specific.frontal_midline_theta import FrontalMidlineThetaComputation
-from phopymnehelper.analysis.computations.specific.jaw_clench_probability import JawClenchProbabilityComputation
-from phopymnehelper.analysis.computations.specific.mental_states import FrameMentalStatesComputation
-
-# xdf_file_name: TypeAlias = str # a name of the xdf file corresponding to a given session
-# EEGComputationId: TypeAlias = Literal["time_independent_bad_channels", "bad_epochs", "raw_data_topo", "cwt", "spectogram"]
-
-EEG_COMPUTATION_IDS_ORDERED: Tuple[types.EEGComputationId, ...] = ("time_independent_bad_channels", "bad_epochs", "raw_data_topo", "cwt", "spectogram")
-
-
-_EEG_NODES_REGISTERED = False
-
 
 class EEGComputationRegistryHelper:
 

@@ -38,46 +38,6 @@ BAND_COLORS_RGB: List[Tuple3] = [
 CacheKey = Tuple[float, float, float]
 
 
-"""Pure NumPy/SciPy helpers for EEG band-limited Global Field Power (GFP).
-
-Used by :mod:`stream_viewer.renderers.line_power_vis` and timeline detail renderers.
-No Qt or pyqtgraph dependencies.
-
-Computation layout
-------------------
-1. Band-pass each channel (Butterworth SOS, zero-phase ``sosfiltfilt``).
-2. GFP trace = sum of squares across channels at each sample.
-3. Optional baseline correction: divide by mean GFP over ``[baseline_start, baseline_end]`` and subtract 1.
-4. Optional bootstrap CI over channel resampling (expensive for large ``n_bootstrap``).
-
-"""
-
-from __future__ import annotations
-
-from typing import Any, Callable, List, MutableMapping, Optional, Sequence, Tuple
-
-import numpy as np
-from scipy import signal
-
-Tuple3 = Tuple[int, int, int]
-
-STANDARD_EEG_FREQUENCY_BANDS: List[Tuple[str, float, float]] = [
-    ("Theta", 4, 7),
-    ("Alpha", 8, 12),
-    ("Beta", 13, 25),
-    ("Gamma", 30, 45),
-]
-
-BAND_COLORS_RGB: List[Tuple3] = [
-    (0, 255, 127),
-    (0, 191, 191),
-    (0, 127, 255),
-    (0, 63, 255),
-]
-
-CacheKey = Tuple[float, float, float]
-
-
 class GFPBandPower:
 
     @classmethod

@@ -37,7 +37,7 @@ class HistoricalData:
     """ Methods related to retrospective processing of recorded data
         
     from phopymnehelper.historical_data import HistoricalData
-    from phopymnehelper.historical_data import HistoricalData
+    
     """
     modality_channels_dict = {'EEG': ['AF3', 'F7', 'F3', 'FC5', 'T7', 'P7', 'O1', 'O2', 'P8', 'T8', 'FC6', 'F4', 'F8', 'AF4'],
                             'MOTION': ['AccX', 'AccY', 'AccZ', 'GyroX', 'GyroY', 'GyroZ'],
@@ -405,6 +405,7 @@ class HistoricalData:
                     if (file_type == 'GENERIC'):
                         # ## GENERIC TYPE:
                         # ## Process line-by-line to handle the variable line lengths
+                        from phopymnehelper.flutter_data import GenericRawDebugFileProcessor
                         modality_out_dfs_dict, modality_out_linedata_df_dict = GenericRawDebugFileProcessor.main_perform_decode(a_recording_file=a_recording_file)
                         for a_modality_name, (final_modality_decoded_df, _remaineder_decoded_df) in modality_out_dfs_dict.items():
                             # final_eeg_decoded_df, _remaineder_decoded_df = modality_out_dfs_dict['EEG']

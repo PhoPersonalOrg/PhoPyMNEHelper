@@ -1549,11 +1549,11 @@ class LabRecorderXDF:
             - all_streams: Dictionary mapping stream names to merged interval DataFrames
             - all_streams_datasources: Dictionary mapping stream names to merged TrackDatasource instances
 
-        from phopymnehelper.xdf_files import XDFDataStreamAccessor, LabRecorderXDF
-        from phopymnehelper.xdf_files import _get_channel_names_for_stream, _is_motion_stream, _is_eeg_quality_stream, _is_eeg_stream, _is_log_stream, merge_streams_by_name
-        from phopymnehelper.xdf_files import modality_channels_dict, modality_sfreq_dict
+        from phopymnehelper.xdf_files import LabRecorderXDF, modality_channels_dict, modality_sfreq_dict
 
         all_streams, all_streams_detailed_data = LabRecorderXDF.perform_process_all_streams_multi_xdf(streams_list=all_streams_by_file, xdf_file_paths=all_loaded_xdf_file_paths, file_headers=all_file_headers)
+        # Helpers live on LabRecorderXDF: merge_streams_by_name, _get_channel_names_for_stream,
+        # _is_motion_stream, _is_eeg_quality_stream, _is_eeg_stream, _is_log_stream
 
 
         """
