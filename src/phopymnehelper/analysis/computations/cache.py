@@ -16,16 +16,6 @@ import pandas as pd
 from phopymnehelper.analysis.computations.protocol import ComputationNode, SessionFingerprint, PROTOCOL_VERSION, canonical_json_hash_payload
 
 
-def sha256_hex_digest(payload: str, n: int = 16) -> str:
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:n]
-
-
-def compute_chained_cache_key(session: SessionFingerprint, node: ComputationNode, params_digest: str, dep_cache_keys: Tuple[str, ...]) -> str:
-    dep_part = canonical_json_hash_payload(tuple(sorted(dep_cache_keys)))
-    payload = canonical_json_hash_payload((PROTOCOL_VERSION, session.payload_for_hash(), node.id, node.version, params_digest, dep_part))
-    return sha256_hex_digest(payload, 16)
-
-
 NODE_MANIFEST_COLUMNS = ["cache_key_hex", "node_id", "session_path", "session_mtime", "params_json", "dep_keys_json", "protocol_version", "node_version", "computed_at"]
 
 
@@ -46,6 +36,18 @@ class DiskComputationCache:
     def __post_init__(self) -> None:
         self.cache_root = Path(self.cache_root)
         self.cache_root.mkdir(parents=True, exist_ok=True)
+
+    @classmethod
+    def sha256_hex_digest(cls, payload: str, n: int = 16) -> str:
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:n]
+
+
+    @classmethod
+    def compute_chained_cache_key(cls, session: SessionFingerprint, node: ComputationNode, params_digest: str, dep_cache_keys: Tuple[str, ...]) -> str:
+        dep_part = canonical_json_hash_payload(tuple(sorted(dep_cache_keys)))
+        payload = canonical_json_hash_payload((PROTOCOL_VERSION, session.payload_for_hash(), node.id, node.version, params_digest, dep_part))
+        return cls.sha256_hex_digest(payload, 16)
+
 
     @property
     def manifest_path(self) -> Path:
@@ -108,4 +110,5 @@ class DiskComputationCache:
 
     def resolve_key_for_node(self, session: SessionFingerprint, node: ComputationNode, params: Mapping[str, Any], dep_keys: Tuple[str, ...]) -> str:
         params_digest = node.effective_params_fingerprint(params)
-        return compute_chained_cache_key(session, node, params_digest, dep_keys)
+        return self.compute_chained_cache_key(session, node, params_digest, dep_keys)
+

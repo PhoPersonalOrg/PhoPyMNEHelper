@@ -6,7 +6,7 @@ import mne
 import numpy as np
 import pandas as pd
 
-from phopymnehelper.analysis.computations.specific.jaw_clench_probability import compute_jaw_clench_probability_from_detailed_df, compute_jaw_clench_probability_from_raw, compute_jaw_clench_probability_merged_for_intervals, compute_jaw_clench_probability_series
+from phopymnehelper.analysis.computations.specific.jaw_clench_probability import JawClenchProbabilityComputation
 
 
 def _make_burst_eeg(n_ch: int = 8, n_samp: int = 1280, fs: float = 128.0, burst_amp: float = 200e-6) -> np.ndarray:
@@ -23,7 +23,7 @@ class TestJawClenchProbabilitySeries(unittest.TestCase):
         fs = 128.0
         data = _make_burst_eeg()
         t_unix = 1000.0 + (np.arange(data.shape[1], dtype=float) / fs)
-        times, prob = compute_jaw_clench_probability_series(data, fs, t_unix=t_unix)
+        times, prob = JawClenchProbabilityComputation.compute_jaw_clench_probability_series(data, fs, t_unix=t_unix)
         self.assertGreater(times.size, 0)
         self.assertTrue(np.all(prob >= 0.0))
         self.assertTrue(np.all(prob <= 1.0))
@@ -33,8 +33,8 @@ class TestJawClenchProbabilitySeries(unittest.TestCase):
         fs = 128.0
         data = _make_burst_eeg()
         t_unix = 1000.0 + (np.arange(data.shape[1], dtype=float) / fs)
-        times_all, _ = compute_jaw_clench_probability_series(data, fs, t_unix=t_unix)
-        times_vp, prob_vp = compute_jaw_clench_probability_series(data, fs, t_unix=t_unix, viewport_t_min=1002.0, viewport_t_max=1004.0)
+        times_all, _ = JawClenchProbabilityComputation.compute_jaw_clench_probability_series(data, fs, t_unix=t_unix)
+        times_vp, prob_vp = JawClenchProbabilityComputation.compute_jaw_clench_probability_series(data, fs, t_unix=t_unix, viewport_t_min=1002.0, viewport_t_max=1004.0)
         self.assertLessEqual(times_vp.size, times_all.size)
         if times_vp.size:
             self.assertGreaterEqual(float(times_vp.min()), 1002.0)
@@ -48,8 +48,8 @@ class TestJawClenchProbabilitySeries(unittest.TestCase):
         ch_names = [f"Ch{i}" for i in range(data.shape[0])]
         df = pd.DataFrame(data.T, columns=ch_names)
         df.insert(0, "t", t_unix)
-        out_df = compute_jaw_clench_probability_from_detailed_df(df, ch_names, fs)
-        times_core, prob_core = compute_jaw_clench_probability_series(data, fs, t_unix=t_unix)
+        out_df = JawClenchProbabilityComputation.compute_jaw_clench_probability_from_detailed_df(df, ch_names, fs)
+        times_core, prob_core = JawClenchProbabilityComputation.compute_jaw_clench_probability_series(data, fs, t_unix=t_unix)
         np.testing.assert_array_almost_equal(out_df["t"].to_numpy(), times_core)
         np.testing.assert_array_almost_equal(out_df["jaw_clench_prob"].to_numpy(), prob_core)
 
@@ -58,7 +58,7 @@ class TestJawClenchProbabilitySeries(unittest.TestCase):
         data = _make_burst_eeg(n_ch=4)
         info = mne.create_info([f"Ch{i}" for i in range(data.shape[0])], sfreq=fs, ch_types="eeg")
         raw = mne.io.RawArray(data, info, verbose="ERROR")
-        result = compute_jaw_clench_probability_from_raw(raw)
+        result = JawClenchProbabilityComputation.compute_jaw_clench_probability_from_raw(raw)
         prob = np.asarray(result["jaw_clench_prob"], dtype=float)
         self.assertGreater(prob.size, 0)
         self.assertTrue(np.all(prob >= 0.0))
@@ -79,7 +79,7 @@ class TestJawClenchMergedForIntervals(unittest.TestCase):
         raw_a = self._make_raw()
         raw_b = self._make_raw()
         intervals_df = pd.DataFrame({"t_start": [t0_a, t0_b], "t_duration": [dur, dur]})
-        result = compute_jaw_clench_probability_merged_for_intervals([raw_a, raw_b], intervals_df)
+        result = JawClenchProbabilityComputation.compute_jaw_clench_probability_merged_for_intervals([raw_a, raw_b], intervals_df)
         times = np.asarray(result["times"], dtype=float)
         self.assertGreater(result["n_windows"], 0)
         self.assertTrue(result.get("times_are_absolute_unix"))
@@ -101,10 +101,10 @@ class TestJawClenchMergedForIntervals(unittest.TestCase):
         parent_df = pd.DataFrame(raw.get_data().T, columns=ch_names)
         parent_df.insert(0, "t", t_vec)
         intervals_df = pd.DataFrame({"t_start": [wrong_t0], "t_duration": [dur]})
-        result_wrong = compute_jaw_clench_probability_merged_for_intervals([raw], intervals_df)
+        result_wrong = JawClenchProbabilityComputation.compute_jaw_clench_probability_merged_for_intervals([raw], intervals_df)
         times_wrong = np.asarray(result_wrong["times"], dtype=float)
         self.assertFalse(np.any((times_wrong >= true_t0 - 1e-3) & (times_wrong <= true_t0 + 20.0)))
-        result_fixed = compute_jaw_clench_probability_merged_for_intervals([raw], intervals_df, parent_detailed_df=parent_df)
+        result_fixed = JawClenchProbabilityComputation.compute_jaw_clench_probability_merged_for_intervals([raw], intervals_df, parent_detailed_df=parent_df)
         times_fixed = np.asarray(result_fixed["times"], dtype=float)
         self.assertGreater(result_fixed["n_windows"], 0)
         self.assertTrue(np.any((times_fixed >= true_t0 - 1e-3) & (times_fixed <= true_t0 + 20.0)))
@@ -115,11 +115,12 @@ class TestJawClenchMergedForIntervals(unittest.TestCase):
         ch_names = [f"EEG{i}" for i in range(data.shape[0])]
         info = mne.create_info(ch_names, sfreq=fs, ch_types="misc")
         raw = mne.io.RawArray(data, info, verbose="ERROR")
-        empty = compute_jaw_clench_probability_from_raw(raw)
+        empty = JawClenchProbabilityComputation.compute_jaw_clench_probability_from_raw(raw)
         self.assertEqual(int(empty["n_windows"]), 0)
-        with_names = compute_jaw_clench_probability_from_raw(raw, channel_names=ch_names)
+        with_names = JawClenchProbabilityComputation.compute_jaw_clench_probability_from_raw(raw, channel_names=ch_names)
         self.assertGreater(int(with_names["n_windows"]), 0)
 
 
 if __name__ == "__main__":
     unittest.main()
+

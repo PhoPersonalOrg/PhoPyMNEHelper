@@ -34,101 +34,7 @@ modality_sfreq_dict = {'EEG': 128, 'MOTION': 16,
 }
 
 
-def _resolve_stream_first_last_timestamp_sec(stream: dict, stream_info_dict: dict, stream_name: str, n_samples: int, fs: float) -> None:
-    """Fill missing ``first_timestamp`` / ``last_timestamp`` (and ``sample_count`` if absent) into ``stream_info_dict``.
 
-    Resolution order: (1) keys already merged from footer; (2) raw ``footer.info``; (3) min/max of ``time_stamps`` (source
-    ``time_stamps``); (4) ``created_at`` plus ``(n_samples - 1) / fs`` if stamps are empty (``created_at_heuristic``).
-
-    Logs a warning when salvaging. Raises ``ValueError`` if nothing can be inferred.
-    """
-    if stream_info_dict.get('sample_count', None) is None and n_samples > 0:
-        stream_info_dict['sample_count'] = float(n_samples)
-    need_first = stream_info_dict.get('first_timestamp', None) is None
-    need_last = stream_info_dict.get('last_timestamp', None) is None
-    if not need_first and not need_last:
-        return
-    finfo = stream.get('footer', {}).get('info', {})
-    ft = unwrap_single_element_listlike_if_needed(finfo.get('first_timestamp'))
-    lt = unwrap_single_element_listlike_if_needed(finfo.get('last_timestamp'))
-    if need_first and ft is not None:
-        stream_info_dict['first_timestamp'] = float(ft)
-        need_first = False
-    if need_last and lt is not None:
-        stream_info_dict['last_timestamp'] = float(lt)
-        need_last = False
-    if not need_first and not need_last:
-        return
-    ts = np.asarray(stream.get('time_stamps', []), dtype=float)
-    if ts.size >= 1:
-        if need_first:
-            stream_info_dict['first_timestamp'] = float(np.min(ts))
-        if need_last:
-            stream_info_dict['last_timestamp'] = float(np.max(ts))
-        logger.warning('XDF stream "%s": incomplete or missing stream footer; filled first/last from time_stamps where needed', stream_name)
-        return
-    if n_samples > 0 and fs > 0 and stream_info_dict.get('created_at', None) is not None:
-        c0 = float(stream_info_dict['created_at'])
-        c1 = c0 + float(n_samples - 1) / float(fs)
-        if need_first:
-            stream_info_dict['first_timestamp'] = c0
-        if need_last:
-            stream_info_dict['last_timestamp'] = c1
-        logger.warning('XDF stream "%s": missing footer and empty time_stamps; filled first/last from created_at and stream length', stream_name)
-        return
-    raise ValueError(f'XDF stream "{stream_name}": cannot resolve first_timestamp/last_timestamp (no footer, no time_stamps, no heuristic)')
-
-
-def merge_streams_by_name(streams_by_file: List[Tuple[List, Path]]) -> Dict[str, List[Tuple[Dict, Path]]]:
-    """Group streams by name across multiple XDF files.
-
-    Args:
-        streams_by_file: List of tuples (streams_list, file_path) where streams_list is a list of stream dictionaries
-                         from pyxdf and file_path is the Path to the XDF file
-
-    Returns:
-        Dictionary mapping stream names to lists of (stream_dict, file_path) tuples
-    """
-    streams_by_name = {}
-    for streams, file_path in streams_by_file:
-        for stream in streams:
-            stream_name = stream['info']['name'][0]
-            if stream_name not in streams_by_name:
-                streams_by_name[stream_name] = []
-            streams_by_name[stream_name].append((stream, file_path))
-    return streams_by_name
-
-
-
-
-
-# Specific Stream Modality Helpers
-def _is_motion_stream(stream_type: str, stream_name: str) -> bool:
-    return (stream_type.upper() in ['SIGNAL', 'RAW']) and ('Motion' in stream_name)
-
-
-def _is_eeg_quality_stream(stream_type: str, stream_name: str) -> bool:
-    return (stream_type.upper() in ['RAW']) and (' eQuality' in stream_name)
-
-
-def _is_eeg_stream(stream_type: str, stream_name: str) -> bool:
-    return stream_type.upper() == 'EEG'
-
-
-def _is_log_stream(stream_type: str, stream_name: str) -> bool:
-    return (stream_type.upper() in ['MARKERS']) and (stream_name in ['EventBoard', 'TextLogger', 'SeqDebugText', 'WhisperLiveLogger'])
-
-
-
-
-def _get_channel_names_for_stream(stream_type: str, stream_name: str, n_columns: int) -> List[str]:
-    if _is_motion_stream(stream_type, stream_name):
-        return modality_channels_dict['MOTION']
-    if _is_eeg_quality_stream(stream_type, stream_name) or _is_eeg_stream(stream_type, stream_name):
-        return modality_channels_dict['EEG']
-    if _is_log_stream(stream_type, stream_name):
-        return modality_channels_dict['LOG']
-    return [f'Channel_{i}' for i in range(n_columns)]
 
 
 
@@ -376,11 +282,112 @@ class LabRecorderXDF:
     datasets_dict: Dict[DataModalityType, List[mne.io.Raw]] = field(default=None)
 
 
+    @classmethod
+    def _resolve_stream_first_last_timestamp_sec(cls, stream: dict, stream_info_dict: dict, stream_name: str, n_samples: int, fs: float) -> None:
+        """Fill missing ``first_timestamp`` / ``last_timestamp`` (and ``sample_count`` if absent) into ``stream_info_dict``.
+
+        Resolution order: (1) keys already merged from footer; (2) raw ``footer.info``; (3) min/max of ``time_stamps`` (source
+        ``time_stamps``); (4) ``created_at`` plus ``(n_samples - 1) / fs`` if stamps are empty (``created_at_heuristic``).
+
+        Logs a warning when salvaging. Raises ``ValueError`` if nothing can be inferred.
+        """
+        if stream_info_dict.get('sample_count', None) is None and n_samples > 0:
+            stream_info_dict['sample_count'] = float(n_samples)
+        need_first = stream_info_dict.get('first_timestamp', None) is None
+        need_last = stream_info_dict.get('last_timestamp', None) is None
+        if not need_first and not need_last:
+            return
+        finfo = stream.get('footer', {}).get('info', {})
+        ft = unwrap_single_element_listlike_if_needed(finfo.get('first_timestamp'))
+        lt = unwrap_single_element_listlike_if_needed(finfo.get('last_timestamp'))
+        if need_first and ft is not None:
+            stream_info_dict['first_timestamp'] = float(ft)
+            need_first = False
+        if need_last and lt is not None:
+            stream_info_dict['last_timestamp'] = float(lt)
+            need_last = False
+        if not need_first and not need_last:
+            return
+        ts = np.asarray(stream.get('time_stamps', []), dtype=float)
+        if ts.size >= 1:
+            if need_first:
+                stream_info_dict['first_timestamp'] = float(np.min(ts))
+            if need_last:
+                stream_info_dict['last_timestamp'] = float(np.max(ts))
+            logger.warning('XDF stream "%s": incomplete or missing stream footer; filled first/last from time_stamps where needed', stream_name)
+            return
+        if n_samples > 0 and fs > 0 and stream_info_dict.get('created_at', None) is not None:
+            c0 = float(stream_info_dict['created_at'])
+            c1 = c0 + float(n_samples - 1) / float(fs)
+            if need_first:
+                stream_info_dict['first_timestamp'] = c0
+            if need_last:
+                stream_info_dict['last_timestamp'] = c1
+            logger.warning('XDF stream "%s": missing footer and empty time_stamps; filled first/last from created_at and stream length', stream_name)
+            return
+        raise ValueError(f'XDF stream "{stream_name}": cannot resolve first_timestamp/last_timestamp (no footer, no time_stamps, no heuristic)')
+
+
+    @classmethod
+    def merge_streams_by_name(cls, streams_by_file: List[Tuple[List, Path]]) -> Dict[str, List[Tuple[Dict, Path]]]:
+        """Group streams by name across multiple XDF files.
+
+        Args:
+            streams_by_file: List of tuples (streams_list, file_path) where streams_list is a list of stream dictionaries
+                             from pyxdf and file_path is the Path to the XDF file
+
+        Returns:
+            Dictionary mapping stream names to lists of (stream_dict, file_path) tuples
+        """
+        streams_by_name = {}
+        for streams, file_path in streams_by_file:
+            for stream in streams:
+                stream_name = stream['info']['name'][0]
+                if stream_name not in streams_by_name:
+                    streams_by_name[stream_name] = []
+                streams_by_name[stream_name].append((stream, file_path))
+            ## END for stream in streams...
+        ## END for streams, file_path in streams_by_file...
+
+        return streams_by_name
+
+
+    @classmethod
+    def _is_motion_stream(cls, stream_type: str, stream_name: str) -> bool:
+        return (stream_type.upper() in ['SIGNAL', 'RAW']) and ('Motion' in stream_name)
+
+
+    @classmethod
+    def _is_eeg_quality_stream(cls, stream_type: str, stream_name: str) -> bool:
+        return (stream_type.upper() in ['RAW']) and (' eQuality' in stream_name)
+
+
+    @classmethod
+    def _is_eeg_stream(cls, stream_type: str, stream_name: str) -> bool:
+        return stream_type.upper() == 'EEG'
+
+
+    @classmethod
+    def _is_log_stream(cls, stream_type: str, stream_name: str) -> bool:
+        return (stream_type.upper() in ['MARKERS']) and (stream_name in ['EventBoard', 'TextLogger', 'SeqDebugText', 'WhisperLiveLogger'])
+
+
+    @classmethod
+    def _get_channel_names_for_stream(cls, stream_type: str, stream_name: str, n_columns: int) -> List[str]:
+        if cls._is_motion_stream(stream_type, stream_name):
+            return modality_channels_dict['MOTION']
+        if cls._is_eeg_quality_stream(stream_type, stream_name) or cls._is_eeg_stream(stream_type, stream_name):
+            return modality_channels_dict['EEG']
+        if cls._is_log_stream(stream_type, stream_name):
+            return modality_channels_dict['LOG']
+        return [f'Channel_{i}' for i in range(n_columns)]
+
+
     # --------------------------------------------------------------------- #
     #                     EEG grouping / merging helpers                    #
     # --------------------------------------------------------------------- #
-    @staticmethod
-    def _get_eeg_device_key(raw: mne.io.BaseRaw) -> str:
+    @classmethod
+    def _get_eeg_device_key(cls, raw: mne.io.BaseRaw) -> str:
         """Returns a stable device key for grouping EEG raws from the same source.
 
         Prefers info['device_info']['stream_info']['source_id'] when available,
@@ -422,9 +429,9 @@ class LabRecorderXDF:
             return [], []
 
         # Up-convert once for safety/consistency
-        from phopymnehelper.MNE_helpers import up_convert_raw_obj
+        from phopymnehelper.MNE_helpers import MNEHelpers
 
-        eeg_raws_uc = [up_convert_raw_obj(r) for r in eeg_raws]
+        eeg_raws_uc = [MNEHelpers.up_convert_raw_obj(r) for r in eeg_raws]
 
         # 1) Group by device key
         groups: Dict[str, List[int]] = {}
@@ -632,7 +639,7 @@ class LabRecorderXDF:
                     if a_value is not None:
                         stream_info_dict[a_key] = float(a_value)
 
-                _resolve_stream_first_last_timestamp_sec(stream, stream_info_dict, name, n_samples, fs)
+                self._resolve_stream_first_last_timestamp_sec(stream, stream_info_dict, name, n_samples, fs)
 
                 ## Update the timestamp keys to float values, and the create a datetime column by adding them to the `file_datetime`
                 timestamp_keys = ('created_at', 'first_timestamp', 'last_timestamp')
@@ -795,7 +802,7 @@ class LabRecorderXDF:
                         if a_value is not None:
                             stream_info_dict[a_key] = float(a_value)
 
-                    _resolve_stream_first_last_timestamp_sec(stream, stream_info_dict, name, n_samples, fs)
+                    self._resolve_stream_first_last_timestamp_sec(stream, stream_info_dict, name, n_samples, fs)
 
                     ## Update the timestamp keys to float values, and the create a datetime column by adding them to the `file_datetime`
                     timestamp_keys = ('created_at', 'first_timestamp', 'last_timestamp')
@@ -1131,7 +1138,7 @@ class LabRecorderXDF:
         if `not should_load_full_file_data`, only return the `_out_xdf_stream_infos_df, lab_recorder_xdf_files` and not `_out_eeg_raw` (which will be None)
 
         """
-        from phopymnehelper.MNE_helpers import up_convert_raw_objects, up_convert_raw_obj
+        from phopymnehelper.MNE_helpers import MNEHelpers
         from phopymnehelper.EEG_data import EEGData
                                        
         assert lab_recorder_output_path.exists()
@@ -1206,7 +1213,7 @@ class LabRecorderXDF:
                     this_stream_infos['xdf_dataset_idx'] = len(_out_xdf_stream_infos_df)
 
                     if should_load_full_file_data:
-                        eeg_raw = up_convert_raw_obj(eeg_raw)
+                        eeg_raw = MNEHelpers.up_convert_raw_obj(eeg_raw)
                         EEGData.set_montage(datasets_EEG=[eeg_raw])
                         eeg_raw.debug_test_annotations_timestamps()
                         _out_eeg_raw.append(eeg_raw)
@@ -1236,7 +1243,7 @@ class LabRecorderXDF:
             _out_eeg_raw = None
             return _out_eeg_raw, _out_xdf_stream_infos_df, lab_recorder_xdf_files
 
-        _out_eeg_raw = up_convert_raw_objects(_out_eeg_raw)
+        _out_eeg_raw = MNEHelpers.up_convert_raw_objects(_out_eeg_raw)
         _out_eeg_raw.sort(key=lambda r: (r.raw_timerange()[0] is None, r.raw_timerange()[0]))
 
         EEGData.set_montage(datasets_EEG=_out_eeg_raw)
@@ -1598,7 +1605,7 @@ class LabRecorderXDF:
             elif not ((n_channels == n_columns) and (len(timestamps) == n_t_stamps)):
                 return None
 
-            time_series_df = pd.DataFrame(time_series, columns=_get_channel_names_for_stream(stream_type, stream_name, n_columns))
+            time_series_df = pd.DataFrame(time_series, columns=cls._get_channel_names_for_stream(stream_type, stream_name, n_columns))
             time_series_df['t'] = timestamps
             return time_series_df
 
@@ -1679,7 +1686,7 @@ class LabRecorderXDF:
 
         # Group streams by name across all files
         streams_by_file = list(zip(streams_list, xdf_file_paths))
-        streams_by_name = merge_streams_by_name(streams_by_file)
+        streams_by_name = cls.merge_streams_by_name(streams_by_file)
 
         all_streams = {}
         all_streams_detailed_data = {}

@@ -264,7 +264,7 @@ class HistoricalData:
             HistoricalData.read_exported_fif_files(found_recording_files=found_recording_files)
 
         """
-        from phopymnehelper.MNE_helpers import DatasetDatetimeBoundsRenderingMixin, RawArrayExtended, RawExtended, up_convert_raw_objects, up_convert_raw_obj
+        from phopymnehelper.MNE_helpers import DatasetDatetimeBoundsRenderingMixin, RawArrayExtended, RawExtended, MNEHelpers
         
         # import csv
         
@@ -364,7 +364,7 @@ class HistoricalData:
             if len(raw.times) == 0:
                 raise ValueError(f"len(raw.times) == 0!! {len(raw.times) == 0}")
             else:
-                up_convert_raw_obj(raw)
+                MNEHelpers.up_convert_raw_obj(raw)
                 
                 datasets[a_file_type].append(raw)
 

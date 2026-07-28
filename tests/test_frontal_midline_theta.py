@@ -5,13 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from phopymnehelper.analysis.computations.specific.frontal_midline_theta import (
-    compute_frontal_midline_theta_merged_for_intervals,
-    compute_frontal_midline_theta_series,
-    filter_frontal_midline_theta_params,
-    frontal_midline_theta_params_fingerprint,
-    resolve_fmt_channel_picks,
-)
+from phopymnehelper.analysis.computations.specific.frontal_midline_theta import FrontalMidlineThetaComputation
 
 
 def _make_raw(ch_names, duration_sec=10.0, sfreq=256.0, freq_hz=7.0):
@@ -24,7 +18,7 @@ def _make_raw(ch_names, duration_sec=10.0, sfreq=256.0, freq_hz=7.0):
 
 def test_compute_frontal_midline_theta_series_keys_and_finite():
     raw = _make_raw(["AF3", "AF4"])
-    result = compute_frontal_midline_theta_series(raw, window_sec=2.0, step_sec=1.0)
+    result = FrontalMidlineThetaComputation.compute_frontal_midline_theta_series(raw, window_sec=2.0, step_sec=1.0)
 
     assert result is not None
     assert "times" in result
@@ -42,41 +36,41 @@ def test_compute_frontal_midline_theta_series_keys_and_finite():
 
 def test_resolve_fmt_channel_picks_prefers_fz():
     raw = _make_raw(["AF3", "AF4", "Fz", "O1"])
-    picks, names = resolve_fmt_channel_picks(raw)
+    picks, names = FrontalMidlineThetaComputation.resolve_fmt_channel_picks(raw)
     assert names == ["Fz"]
     assert picks.size == 1
 
 
 def test_resolve_fmt_channel_picks_af_pair():
     raw = _make_raw(["AF3", "AF4", "O1", "O2"])
-    picks, names = resolve_fmt_channel_picks(raw)
+    picks, names = FrontalMidlineThetaComputation.resolve_fmt_channel_picks(raw)
     assert names == ["AF3", "AF4"]
     assert picks.size == 2
 
 
 def test_resolve_fmt_channel_picks_fallback():
     raw = _make_raw(["F3", "O1", "O2"])
-    picks, names = resolve_fmt_channel_picks(raw)
+    picks, names = FrontalMidlineThetaComputation.resolve_fmt_channel_picks(raw)
     assert names == ["F3"]
     assert picks.size == 1
 
 
 def test_filter_and_fingerprint_strip_unknown_keys():
     params = {"window_sec": 4.0, "step_sec": 1.0, "unknown_key": 123, "fmt_band": (5.0, 9.0)}
-    filtered = filter_frontal_midline_theta_params(params)
+    filtered = FrontalMidlineThetaComputation.filter_frontal_midline_theta_params(params)
     assert "unknown_key" not in filtered
     assert filtered["window_sec"] == 4.0
     assert filtered["fmt_band"] == (5.0, 9.0)
 
-    fp1 = frontal_midline_theta_params_fingerprint({"window_sec": 4.0, "step_sec": 1.0})
-    fp2 = frontal_midline_theta_params_fingerprint({"step_sec": 1.0, "window_sec": 4.0})
+    fp1 = FrontalMidlineThetaComputation.frontal_midline_theta_params_fingerprint({"window_sec": 4.0, "step_sec": 1.0})
+    fp2 = FrontalMidlineThetaComputation.frontal_midline_theta_params_fingerprint({"step_sec": 1.0, "window_sec": 4.0})
     assert fp1 == fp2
 
 
 def test_compute_frontal_midline_theta_series_performance_budget():
     raw = _make_raw(["AF3", "AF4"], duration_sec=600.0, sfreq=256.0)
     t0 = time.monotonic()
-    result = compute_frontal_midline_theta_series(raw, window_sec=4.0, step_sec=1.0)
+    result = FrontalMidlineThetaComputation.compute_frontal_midline_theta_series(raw, window_sec=4.0, step_sec=1.0)
     elapsed = time.monotonic() - t0
     assert elapsed < 3.0, f"FMT compute took {elapsed:.2f}s (budget 3s)"
     assert result["n_windows"] > 0
@@ -100,7 +94,7 @@ def test_merge_with_motion_df_slice():
             "AccZ": np.ones(500) * 0.01,
         }
     )
-    result = compute_frontal_midline_theta_merged_for_intervals(
+    result = FrontalMidlineThetaComputation.compute_frontal_midline_theta_merged_for_intervals(
         [raw_a, raw_b],
         intervals_df,
         motion_df=motion_df,
@@ -109,3 +103,4 @@ def test_merge_with_motion_df_slice():
     assert result["merged_n_segments"] == 2
     assert len(result["times"]) == len(result["fmt_power"])
     assert result["n_windows"] > 0
+

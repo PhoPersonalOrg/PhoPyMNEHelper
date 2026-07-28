@@ -117,8 +117,8 @@ class MentalStatesRollingState:
             return 50.0 + 50.0 * (dB_value - min_val) / (max_val - min_val)
         return 50.0
 
-    @staticmethod
-    def _rolling_norm_100(log_ratio: float, ratio_deque: Deque[float]) -> float:
+    @classmethod
+    def _rolling_norm_100(cls, log_ratio: float, ratio_deque: Deque[float]) -> float:
         ratio_deque.append(float(log_ratio))
         rmin = min(ratio_deque)
         rmax = max(ratio_deque)
@@ -162,8 +162,8 @@ class FrameMentalStatesComputation(SpecificComputationBase):
     deps: ClassVar[Tuple[str, ...]] = ()
     artifact_kind: ClassVar[ArtifactKind] = ArtifactKind.stream
 
-    @staticmethod
-    def _merged_power_from_filtered_block(block_2d: np.ndarray) -> float:
+    @classmethod
+    def _merged_power_from_filtered_block(cls, block_2d: np.ndarray) -> float:
         """Mean channel variance on already band-pass filtered data."""
         if block_2d.size == 0:
             return float("nan")
@@ -691,191 +691,184 @@ class FrameMentalStatesComputation(SpecificComputationBase):
         return self.compute_frame_mental_states_from_raw(ctx.raw, **dict(params))
 
 
-compute_frame_mental_states_series = FrameMentalStatesComputation.compute_frame_mental_states_series
-compute_frame_mental_states_from_detailed_df = FrameMentalStatesComputation.compute_frame_mental_states_from_detailed_df
-compute_frame_mental_states_from_raw = FrameMentalStatesComputation.compute_frame_mental_states_from_raw
-compute_frame_mental_states_merged_for_intervals = FrameMentalStatesComputation.compute_frame_mental_states_merged_for_intervals
-mental_states_colored_title_html = FrameMentalStatesComputation.mental_states_colored_title_html
+    @classmethod
+    def compute_frame_mental_states_for_eeg_datasource(cls, eeg_ds: Any, *, eeg_name: Optional[str] = None, **compute_kw: Any) -> Dict[str, Any]:
+        """Compute mental states from a timeline EEG datasource (live or offline with raws).
 
+        Returns ``{"live": True}`` for live LSL EEG, else ``{"live": False, "result": ...}``.
+        """
+        from pypho_timeline.rendering.datasources.specific.lsl import LiveEEGTrackDatasource
+        from pypho_timeline.rendering.datasources.track_datasource import RawProvidingTrackDatasource
 
-def compute_frame_mental_states_for_eeg_datasource(eeg_ds: Any, *, eeg_name: Optional[str] = None, **compute_kw: Any) -> Dict[str, Any]:
-    """Compute mental states from a timeline EEG datasource (live or offline with raws).
+        if isinstance(eeg_ds, LiveEEGTrackDatasource):
+            return {"live": True}
 
-    Returns ``{"live": True}`` for live LSL EEG, else ``{"live": False, "result": ...}``.
-    """
-    from pypho_timeline.rendering.datasources.specific.lsl import LiveEEGTrackDatasource
-    from pypho_timeline.rendering.datasources.track_datasource import RawProvidingTrackDatasource
-
-    if isinstance(eeg_ds, LiveEEGTrackDatasource):
-        return {"live": True}
-
-    label = eeg_name or getattr(eeg_ds, "custom_datasource_name", "EEG")
-    iv = getattr(eeg_ds, "intervals_df", None)
-    if iv is None or len(iv) == 0:
-        raise ValueError(f"{label}: no intervals_df (cannot align raws).")
-    rd = getattr(eeg_ds, "raw_datasets_dict", None)
-    raws_list, n_align = RawProvidingTrackDatasource.aligned_chronological_raws_for_intervals(
-        intervals_df=iv,
-        raw_datasets_dict=rd,
-    )
-    if not raws_list or n_align <= 0:
-        raise ValueError(f"{label}: no MNE Raw available.")
-    result = compute_frame_mental_states_merged_for_intervals(raws_list[:n_align], iv.iloc[:n_align], **compute_kw)
-    return {"live": False, "result": result}
-
-
-
-def start_frame_mental_states_track_background(timeline: Any, *, eeg_name: str, eeg_ds: Any, executor: Any = None,
-            on_complete: Optional[Any] = None, on_error: Optional[Any] = None,
-            **compute_kw: Any) -> Tuple[Any, Any]:
-    """Run mental-states batch compute off the Qt thread; apply the track on the main thread.
-
-    Parameters
-    ----------
-    executor
-        Optional shared :class:`concurrent.futures.Executor`. When omitted, a single-worker
-        :class:`concurrent.futures.ThreadPoolExecutor` is created and returned for reuse/shutdown.
-    on_complete
-        Optional ``callable(ms_widget, ms_track, ms_ds)`` after a successful apply.
-    on_error
-        Optional ``callable(exc)`` when compute or apply fails.
-
-    Returns
-    -------
-    future, executor
-        The submitted future and the executor instance (owned when not passed in).
-    """
-    from concurrent.futures import ThreadPoolExecutor
-    from qtpy import QtCore
-
-    from pypho_timeline.rendering.datasources.specific.eeg import mental_states_track_key_for_eeg_datasource
-
-    owned_executor = executor is None
-    ex = executor or ThreadPoolExecutor(max_workers=1)
-    track_key = mental_states_track_key_for_eeg_datasource(eeg_ds)
-    _ctx: Dict[str, Any] = {}
-
-    def _apply_track() -> None:
-        payload = _ctx.get("payload", {})
-        try:
-            if payload.get("live"):
-                applied = apply_frame_mental_states_to_timeline(timeline, eeg_name=eeg_name, eeg_ds=eeg_ds)
-            else:
-                result = payload["result"]
-                logger.info("%s: computed n_windows=%s", track_key, result.get("n_windows", 0))
-                applied = apply_frame_mental_states_to_timeline(timeline, result, eeg_name=eeg_name, eeg_ds=eeg_ds)
-            if on_complete is not None:
-                on_complete(*applied)
-        except Exception as exc:
-            if on_error is not None:
-                on_error(exc)
-            else:
-                logger.warning("%s: mental-states apply failed: %s", track_key, exc)
-    ## END def _apply_track() -> None...
-
-    def _on_done(fut: Any) -> None:
-        try:
-            _ctx["payload"] = fut.result()
-        except Exception as exc:
-            _ctx["error"] = exc
-            if on_error is not None:
-                QtCore.QTimer.singleShot(0, lambda: on_error(exc))
-            else:
-                logger.warning("%s: mental-states compute failed: %s", track_key, exc)
-            if owned_executor:
-                ex.shutdown(wait=False)
-            return
-
-        def _apply_and_maybe_shutdown() -> None:
-            _apply_track()
-            if owned_executor:
-                ex.shutdown(wait=False)
-
-        QtCore.QTimer.singleShot(0, _apply_and_maybe_shutdown)
-    ## END def _on_done(fut: Any) -> None...
-
-
-    fut = ex.submit(compute_frame_mental_states_for_eeg_datasource, eeg_ds, eeg_name=eeg_name, **compute_kw)
-    fut.add_done_callback(_on_done)
-    if owned_executor:
-        logger.debug("%s: started background mental-states compute (owned executor).", track_key)
-    else:
-        logger.debug("%s: started background mental-states compute.", track_key)
-    return fut, ex
-
-
-def apply_frame_mental_states_to_timeline(timeline, result: Optional[Mapping[str, Any]] = None, *, eeg_name: str, eeg_ds: Any, t0: Optional[float] = None, **kwargs) -> Tuple[Any, Any, Any]:
-    """Add or refresh the per-EEG mental-states track on ``timeline``.
-
-    For live LSL EEG, ``result`` may be omitted; a live child datasource recomputes per viewport.
-    For historical EEG, pass ``result`` from :func:`compute_frame_mental_states_merged_for_intervals`.
-    """
-    from pypho_timeline.rendering.datasources.specific.eeg import MentalStatesTrackDatasource, mental_states_track_key_for_eeg_datasource
-    from pypho_timeline.rendering.helpers.normalization import ChannelNormalizationMode
-
-    if eeg_ds is None:
-        raise ValueError("apply_frame_mental_states_to_timeline requires eeg_ds (got None)")
-    if eeg_name is None:
-        raise ValueError("apply_frame_mental_states_to_timeline requires eeg_name (got None)")
-
-    track_key = mental_states_track_key_for_eeg_datasource(eeg_ds)
-    live_mode = False
-    try:
-        from pypho_timeline.rendering.datasources.specific.lsl import LiveEEGTrackDatasource, LiveMentalStatesTrackDatasource
-
-        live_mode = isinstance(eeg_ds, LiveEEGTrackDatasource)
-    except ImportError:
-        LiveMentalStatesTrackDatasource = None  # type: ignore[misc, assignment]
-
-    if track_key in timeline.track_renderers and hasattr(timeline, "track_is_fully_attached") and timeline.track_is_fully_attached(track_key):
-        logger.info("%s: refreshing existing track.", track_key)
-        ms_widget, ms_track, ms_ds = timeline.get_track_tuple(track_key)
-        if live_mode and LiveMentalStatesTrackDatasource is not None:
-            ms_ds._source_eeg = eeg_ds  # type: ignore[attr-defined]
-            if getattr(eeg_ds, "intervals_df", None) is not None:
-                ms_ds.intervals_df = eeg_ds.intervals_df.copy()
-        elif result is not None:
-            detailed = FrameMentalStatesComputation._result_to_detailed_df(result, eeg_ds, track_key, t0=t0)
-            iv = intervals_df_for_theta_delta_track(eeg_ds, result, log_prefix=track_key)
-            ms_ds.intervals_df = iv
-            ms_ds.detailed_df = detailed
-        ms_ds.source_data_changed_signal.emit()
-        if ms_widget is not None and hasattr(ms_widget, "getRootPlotItem"):
-            from pypho_timeline.rendering.datasources.specific.eeg import MentalStatesDetailRenderer
-            FrameMentalStatesComputation._apply_mental_states_plot_chrome(ms_widget.getRootPlotItem(), y_max=MentalStatesDetailRenderer.Y_MAX)
-        return (ms_widget, ms_track, ms_ds)
-
-    if hasattr(timeline, "teardown_orphaned_track"):
-        timeline.teardown_orphaned_track(track_key)
-
-    ref_name = eeg_ds.custom_datasource_name
-    if live_mode and LiveMentalStatesTrackDatasource is not None:
-        logger.info("%s: creating live mental-states track.", track_key)
-        ms_ds = LiveMentalStatesTrackDatasource(source_eeg=eeg_ds, parent=eeg_ds)
-    else:
-        if result is None:
-            raise ValueError(f"{track_key}: historical apply requires result dict")
-        n_windows = int(result.get("n_windows", 0) or 0)
-        if n_windows <= 0:
-            raise ValueError(f"{track_key}: mental-states computation produced no windows.")
-        detailed = FrameMentalStatesComputation._result_to_detailed_df(result, eeg_ds, track_key, t0=t0)
-        iv = intervals_df_for_theta_delta_track(eeg_ds, result, log_prefix=track_key)
-        logger.info("%s: creating mental-states track (n=%s).", track_key, n_windows)
-        ms_ds = MentalStatesTrackDatasource(
+        label = eeg_name or getattr(eeg_ds, "custom_datasource_name", "EEG")
+        iv = getattr(eeg_ds, "intervals_df", None)
+        if iv is None or len(iv) == 0:
+            raise ValueError(f"{label}: no intervals_df (cannot align raws).")
+        rd = getattr(eeg_ds, "raw_datasets_dict", None)
+        raws_list, n_align = RawProvidingTrackDatasource.aligned_chronological_raws_for_intervals(
             intervals_df=iv,
-            eeg_df=detailed,
-            custom_datasource_name=track_key,
-            max_points_per_second=32.0,
-            enable_downsampling=True,
-            channel_names=list(MENTAL_STATE_COLUMNS),
-            normalize=False,
-            fallback_normalization_mode=ChannelNormalizationMode.NONE,
-            lab_obj_dict=getattr(eeg_ds, "lab_obj_dict", None),
-            raw_datasets_dict=getattr(eeg_ds, "raw_datasets_dict", None),
-            **FrameMentalStatesComputation._style_mental_states_line(),
+            raw_datasets_dict=rd,
         )
+        if not raws_list or n_align <= 0:
+            raise ValueError(f"{label}: no MNE Raw available.")
+        result = cls.compute_frame_mental_states_merged_for_intervals(raws_list[:n_align], iv.iloc[:n_align], **compute_kw)
+        return {"live": False, "result": result}
 
-    return FrameMentalStatesComputation._embed_mental_states_track_on_timeline(timeline, ms_ds, ref_name)
+
+    @classmethod
+    def start_frame_mental_states_track_background(cls, timeline: Any, *, eeg_name: str, eeg_ds: Any, executor: Any = None, on_complete: Optional[Any] = None, on_error: Optional[Any] = None, **compute_kw: Any) -> Tuple[Any, Any]:
+        """Run mental-states batch compute off the Qt thread; apply the track on the main thread.
+
+        Parameters
+        ----------
+        executor
+            Optional shared :class:`concurrent.futures.Executor`. When omitted, a single-worker
+            :class:`concurrent.futures.ThreadPoolExecutor` is created and returned for reuse/shutdown.
+        on_complete
+            Optional ``callable(ms_widget, ms_track, ms_ds)`` after a successful apply.
+        on_error
+            Optional ``callable(exc)`` when compute or apply fails.
+
+        Returns
+        -------
+        future, executor
+            The submitted future and the executor instance (owned when not passed in).
+        """
+        from concurrent.futures import ThreadPoolExecutor
+        from qtpy import QtCore
+
+        from pypho_timeline.rendering.datasources.specific.eeg import mental_states_track_key_for_eeg_datasource
+
+        owned_executor = executor is None
+        ex = executor or ThreadPoolExecutor(max_workers=1)
+        track_key = mental_states_track_key_for_eeg_datasource(eeg_ds)
+        _ctx: Dict[str, Any] = {}
+
+        def _apply_track() -> None:
+            payload = _ctx.get("payload", {})
+            try:
+                if payload.get("live"):
+                    applied = cls.apply_frame_mental_states_to_timeline(timeline, eeg_name=eeg_name, eeg_ds=eeg_ds)
+                else:
+                    result = payload["result"]
+                    logger.info("%s: computed n_windows=%s", track_key, result.get("n_windows", 0))
+                    applied = cls.apply_frame_mental_states_to_timeline(timeline, result, eeg_name=eeg_name, eeg_ds=eeg_ds)
+                if on_complete is not None:
+                    on_complete(*applied)
+            except Exception as exc:
+                if on_error is not None:
+                    on_error(exc)
+                else:
+                    logger.warning("%s: mental-states apply failed: %s", track_key, exc)
+        ## END def _apply_track() -> None...
+
+        def _on_done(fut: Any) -> None:
+            try:
+                _ctx["payload"] = fut.result()
+            except Exception as exc:
+                _ctx["error"] = exc
+                if on_error is not None:
+                    QtCore.QTimer.singleShot(0, lambda: on_error(exc))
+                else:
+                    logger.warning("%s: mental-states compute failed: %s", track_key, exc)
+                if owned_executor:
+                    ex.shutdown(wait=False)
+                return
+
+            def _apply_and_maybe_shutdown() -> None:
+                _apply_track()
+                if owned_executor:
+                    ex.shutdown(wait=False)
+
+            QtCore.QTimer.singleShot(0, _apply_and_maybe_shutdown)
+        ## END def _on_done(fut: Any) -> None...
+
+        fut = ex.submit(cls.compute_frame_mental_states_for_eeg_datasource, eeg_ds, eeg_name=eeg_name, **compute_kw)
+        fut.add_done_callback(_on_done)
+        if owned_executor:
+            logger.debug("%s: started background mental-states compute (owned executor).", track_key)
+        else:
+            logger.debug("%s: started background mental-states compute.", track_key)
+        return fut, ex
+
+
+    @classmethod
+    def apply_frame_mental_states_to_timeline(cls, timeline, result: Optional[Mapping[str, Any]] = None, *, eeg_name: str, eeg_ds: Any, t0: Optional[float] = None, **kwargs) -> Tuple[Any, Any, Any]:
+        """Add or refresh the per-EEG mental-states track on ``timeline``.
+
+        For live LSL EEG, ``result`` may be omitted; a live child datasource recomputes per viewport.
+        For historical EEG, pass ``result`` from :func:`compute_frame_mental_states_merged_for_intervals`.
+        """
+        from pypho_timeline.rendering.datasources.specific.eeg import MentalStatesTrackDatasource, mental_states_track_key_for_eeg_datasource
+        from pypho_timeline.rendering.helpers.normalization import ChannelNormalizationMode
+        from phopymnehelper.analysis.computations.specific.ADHD_sleep_intrusions import ThetaDeltaSleepIntrusionComputation
+
+        if eeg_ds is None:
+            raise ValueError("apply_frame_mental_states_to_timeline requires eeg_ds (got None)")
+        if eeg_name is None:
+            raise ValueError("apply_frame_mental_states_to_timeline requires eeg_name (got None)")
+
+        track_key = mental_states_track_key_for_eeg_datasource(eeg_ds)
+        live_mode = False
+        try:
+            from pypho_timeline.rendering.datasources.specific.lsl import LiveEEGTrackDatasource, LiveMentalStatesTrackDatasource
+
+            live_mode = isinstance(eeg_ds, LiveEEGTrackDatasource)
+        except ImportError:
+            LiveMentalStatesTrackDatasource = None  # type: ignore[misc, assignment]
+
+        if track_key in timeline.track_renderers and hasattr(timeline, "track_is_fully_attached") and timeline.track_is_fully_attached(track_key):
+            logger.info("%s: refreshing existing track.", track_key)
+            ms_widget, ms_track, ms_ds = timeline.get_track_tuple(track_key)
+            if live_mode and LiveMentalStatesTrackDatasource is not None:
+                ms_ds._source_eeg = eeg_ds  # type: ignore[attr-defined]
+                if getattr(eeg_ds, "intervals_df", None) is not None:
+                    ms_ds.intervals_df = eeg_ds.intervals_df.copy()
+            elif result is not None:
+                detailed = cls._result_to_detailed_df(result, eeg_ds, track_key, t0=t0)
+                iv = ThetaDeltaSleepIntrusionComputation.intervals_df_for_theta_delta_track(eeg_ds, result, log_prefix=track_key)
+                ms_ds.intervals_df = iv
+                ms_ds.detailed_df = detailed
+            ms_ds.source_data_changed_signal.emit()
+            if ms_widget is not None and hasattr(ms_widget, "getRootPlotItem"):
+                from pypho_timeline.rendering.datasources.specific.eeg import MentalStatesDetailRenderer
+                cls._apply_mental_states_plot_chrome(ms_widget.getRootPlotItem(), y_max=MentalStatesDetailRenderer.Y_MAX)
+            return (ms_widget, ms_track, ms_ds)
+
+        if hasattr(timeline, "teardown_orphaned_track"):
+            timeline.teardown_orphaned_track(track_key)
+
+        ref_name = eeg_ds.custom_datasource_name
+        if live_mode and LiveMentalStatesTrackDatasource is not None:
+            logger.info("%s: creating live mental-states track.", track_key)
+            ms_ds = LiveMentalStatesTrackDatasource(source_eeg=eeg_ds, parent=eeg_ds)
+        else:
+            if result is None:
+                raise ValueError(f"{track_key}: historical apply requires result dict")
+            n_windows = int(result.get("n_windows", 0) or 0)
+            if n_windows <= 0:
+                raise ValueError(f"{track_key}: mental-states computation produced no windows.")
+            detailed = cls._result_to_detailed_df(result, eeg_ds, track_key, t0=t0)
+            iv = ThetaDeltaSleepIntrusionComputation.intervals_df_for_theta_delta_track(eeg_ds, result, log_prefix=track_key)
+            logger.info("%s: creating mental-states track (n=%s).", track_key, n_windows)
+            ms_ds = MentalStatesTrackDatasource(
+                intervals_df=iv,
+                eeg_df=detailed,
+                custom_datasource_name=track_key,
+                max_points_per_second=32.0,
+                enable_downsampling=True,
+                channel_names=list(MENTAL_STATE_COLUMNS),
+                normalize=False,
+                fallback_normalization_mode=ChannelNormalizationMode.NONE,
+                lab_obj_dict=getattr(eeg_ds, "lab_obj_dict", None),
+                raw_datasets_dict=getattr(eeg_ds, "raw_datasets_dict", None),
+                **cls._style_mental_states_line(),
+            )
+
+        return cls._embed_mental_states_track_on_timeline(timeline, ms_ds, ref_name)
 
 
 __all__ = [
@@ -893,12 +886,5 @@ __all__ = [
     "MENTAL_STATE_RELAXATION",
     "MENTAL_STATE_STRESS",
     "MentalStatesRollingState",
-    "apply_frame_mental_states_to_timeline",
-    "compute_frame_mental_states_for_eeg_datasource",
-    "start_frame_mental_states_track_background",
-    "mental_states_colored_title_html",
-    "compute_frame_mental_states_from_detailed_df",
-    "compute_frame_mental_states_from_raw",
-    "compute_frame_mental_states_merged_for_intervals",
-    "compute_frame_mental_states_series",
 ]
+
