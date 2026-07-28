@@ -181,7 +181,7 @@ class MNEHelpers:
         ## INPUTS: meas_date
         active_times = deepcopy(df[time_col_names].to_numpy())
         
-        is_bad = df[is_bad_col_name]
+        is_bad = df[is_bad_col_name].to_numpy()
         # split into contiguous segments
         idx = np.where(np.diff(is_bad.astype(int)) != 0)[0] + 1 # the +1 is to adjust for the diff operation
         segments = np.split(np.arange(len(is_bad)), idx)

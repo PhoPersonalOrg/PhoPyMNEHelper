@@ -98,11 +98,11 @@ class MotionData:
         is_moving_annots_df: pd.DataFrame = MNEHelpers.convert_df_with_boolean_col_to_epochs(deepcopy(a_motion_df), is_bad_col_name="is_moving", annotation_description_name="BAD_motion", time_col_names=time_col_names)
         if (minimum_bad_duration is not None) and (minimum_bad_duration > 0.0):
             _dur = is_moving_annots_df['duration']
-            _dur_cmp = _dur.dt.total_seconds() if pd.api.types.is_timedelta64_dtype(_dur.dtype) else _dur
+            _dur_cmp = _dur.dt.total_seconds() if pd.api.types.is_timedelta64_dtype(_dur.dtype) else pd.to_numeric(_dur, errors='coerce')
             is_moving_annots_df = is_moving_annots_df[_dur_cmp >= minimum_bad_duration].reset_index(drop=True)
 
         _dur_out = is_moving_annots_df['duration']
-        _duration_np = _dur_out.dt.total_seconds().to_numpy(dtype=float) if pd.api.types.is_timedelta64_dtype(_dur_out.dtype) else _dur_out.to_numpy()
+        _duration_np = _dur_out.dt.total_seconds().to_numpy(dtype=float) if pd.api.types.is_timedelta64_dtype(_dur_out.dtype) else pd.to_numeric(_dur_out, errors='coerce').to_numpy(dtype=float)
         is_moving_annots: mne.Annotations = mne.Annotations(onset=is_moving_annots_df['onset'].to_numpy(), duration=_duration_np, description=is_moving_annots_df['description'].to_numpy(), orig_time=meas_date)
 
 
@@ -585,7 +585,10 @@ class BadMotionDataFrame(CommonDataFrameAccessorMixin):
         if inplace:
             # self._obj['t_start'] = self._obj['onset'].map(cls._motion_bad_cell_to_unix_seconds)
             self._obj['t_start'] = self._detail_t_column_to_unix_numpy(self._obj['onset']) #.map(cls._motion_bad_cell_to_unix_seconds)
-            self._obj['t_duration'] = self._obj['duration'].dt.total_seconds()
+            if pd.api.types.is_timedelta64_dtype(self._obj['duration'].dtype):
+                self._obj['t_duration'] = self._obj['duration'].dt.total_seconds()
+            else:
+                self._obj['t_duration'] = pd.to_numeric(self._obj['duration'], errors='coerce')
             ## add the optional end/stop columns:
             self._obj['onset_end'] = self._obj['onset'] + self._obj['duration']
             self._obj['t_stop'] = self._obj['t_start'] + self._obj['t_duration']
@@ -593,7 +596,10 @@ class BadMotionDataFrame(CommonDataFrameAccessorMixin):
         else:
             df: pd.DataFrame = self._obj.copy()
             df['t_start'] = self._detail_t_column_to_unix_numpy(df['onset']) #.map(cls._motion_bad_cell_to_unix_seconds)
-            df['t_duration'] = df['duration'].dt.total_seconds()
+            if pd.api.types.is_timedelta64_dtype(df['duration'].dtype):
+                df['t_duration'] = df['duration'].dt.total_seconds()
+            else:
+                df['t_duration'] = pd.to_numeric(df['duration'], errors='coerce')
             ## add the optional end/stop columns:
             df['onset_end'] = df['onset'] + df['duration']
             df['t_stop'] = df['t_start'] + df['t_duration']
