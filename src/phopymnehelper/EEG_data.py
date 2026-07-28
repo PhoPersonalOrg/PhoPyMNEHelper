@@ -191,20 +191,9 @@ class EEGComputations:
 
 
     @classmethod
-    def run_all(cls, raw, should_suppress_exceptions: bool=True, **kwargs):
-        _all_outputs = {}
-        _all_fns = cls.all_fcns_dict()
-        for a_fn_name, a_fn in _all_fns.items():
-            print(f'running {a_fn_name}...')
-            try:
-                _all_outputs[a_fn_name] = a_fn(raw, **kwargs)
-                print(f'\tdone.')
-            except Exception as e:
-                print(f'\terror occured in {a_fn_name}: error {e}.')
-                if not should_suppress_exceptions:
-                    raise
-            
-        return _all_outputs
+    def run_all(cls, raw, should_suppress_exceptions: bool=True, use_cache: bool=False, cache_root: Optional[Path]=None, **kwargs):
+        """Run all EEG computations via DAG graph execution."""
+        return cls.run_all_with_graph(raw=raw, should_suppress_exceptions=should_suppress_exceptions, use_cache=use_cache, cache_root=cache_root, **kwargs)
 
 
     @classmethod

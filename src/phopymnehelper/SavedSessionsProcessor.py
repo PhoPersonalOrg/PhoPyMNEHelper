@@ -557,5 +557,49 @@ class EntireDayMergedData:
             print(f'save_edf is False so skipping save.')
 
         return concatenated_raw
-    
 
+    def run_batch_computations(
+        self,
+        goals: Sequence[str],
+        global_params: Optional[Mapping[str, Any]] = None,
+        use_cache: bool = True,
+        cache_root: Optional[Path] = None,
+        parallel_sessions: bool = True,
+        max_session_workers: int = 4,
+    ) -> Any:
+        """Run batch DAG computations across all loaded sessions using BatchSessionExecutor."""
+        from phopymnehelper.analysis.computations import BatchResultsAggregator, BatchSessionExecutor, DiskComputationCache, LoadedSessionContext, session_fingerprint_for_raw_or_path
+
+        if "EEG" not in self.modalities or self.modalities["EEG"].datasets is None:
+            raise ValueError("No EEG datasets loaded in SavedSessionsProcessor.")
+
+        eeg_datasets = self.modalities["EEG"].datasets
+        motion_datasets = self.modalities.get("MOTION", SessionModality()).datasets or [None] * len(eeg_datasets)
+
+        cache = DiskComputationCache(cache_root) if (use_cache and cache_root is not None) else None
+        contexts: List[LoadedSessionContext] = []
+
+        for idx, eeg_raw in enumerate(eeg_datasets):
+            if eeg_raw is None:
+                continue
+            session_fp = session_fingerprint_for_raw_or_path(eeg_raw)
+            motion_raw = motion_datasets[idx] if idx < len(motion_datasets) else None
+            ctx = LoadedSessionContext(
+                session=session_fp,
+                eeg_raw=eeg_raw,
+                motion_raw=motion_raw,
+                metadata={"session_idx": idx},
+            )
+            contexts.append(ctx)
+        ## END for idx, eeg_raw in enumerate...
+
+        executor = BatchSessionExecutor(cache=cache, use_cache=use_cache)
+        results = executor.run_batch(
+            session_contexts=contexts,
+            goals=goals,
+            global_params=global_params,
+            parallel_sessions=parallel_sessions,
+            max_session_workers=max_session_workers,
+        )
+
+        return BatchResultsAggregator(results)

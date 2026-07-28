@@ -1,6 +1,6 @@
 [project]
 name = "phopymnehelper"
-version = "0.4.0"
+version = "0.4.1"
 description = "Wrappers for common MNE utilities, such as my personal electrode/head mesh configs"
 readme = "README.md"
 requires-python = ">=3.10,<3.12"
@@ -32,9 +32,9 @@ project-includes = [
 ]
 
 [tool.uv.sources]
-phopylslhelper = { git = "https://github.com/CommanderPho/phopylslhelper.git", rev = "develop" }
+phopylslhelper = { path = "../PhoPyLSLhelper", editable = true }
 
-mne = { git = "https://github.com/CommanderPho/mne-python.git", rev='main' }
+mne = { path = "../mne-python", editable = true }
 
 [build-system]
 requires = ["hatchling"]
