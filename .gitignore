@@ -16,3 +16,4 @@ src/phopymnehelper/resources/ElectrodeLayouts/head_bem_1922V_fill.stl
 **/templating/uv_deps_switcher/backups
 src/phopymnehelper/analysis/computations/specific/__init__.py
 .junie/AGENTS.md
+.coverage

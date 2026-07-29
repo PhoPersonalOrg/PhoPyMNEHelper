@@ -8,6 +8,7 @@ from phopymnehelper.analysis.computations.cache import DiskComputationCache
 from phopymnehelper.analysis.computations.engine import GraphExecutor
 from phopymnehelper.analysis.computations.protocol import DEFAULT_REGISTRY, ArtifactKind, ComputationNode, ComputationRegistry, RunContext, SessionFingerprint
 from phopymnehelper.analysis.computations.specific.ADHD_sleep_intrusions import ThetaDeltaSleepIntrusionComputation
+from phopymnehelper.analysis.computations.specific.amph_peri_event_spectrogram import AmphPeriEventSpectrogramComputation
 from phopymnehelper.analysis.computations.specific.bad_epochs import BadEpochsQCComputation
 from phopymnehelper.analysis.computations.specific.EEG_Spectograms import EEGSpectrogramComputation
 from phopymnehelper.analysis.computations.specific.frontal_midline_theta import FrontalMidlineThetaComputation
@@ -71,6 +72,7 @@ class EEGComputationRegistryHelper:
         cls._register_node_if_absent(registry, FrontalMidlineThetaComputation().to_computation_node())
         cls._register_node_if_absent(registry, JawClenchProbabilityComputation().to_computation_node())
         cls._register_node_if_absent(registry, FrameMentalStatesComputation().to_computation_node())
+        cls._register_node_if_absent(registry, AmphPeriEventSpectrogramComputation().to_computation_node())
 
 
     @classmethod
