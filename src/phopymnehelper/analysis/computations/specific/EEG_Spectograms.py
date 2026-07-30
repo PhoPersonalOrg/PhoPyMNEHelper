@@ -58,7 +58,7 @@ class EEGSpectrogramComputation(SpecificComputationBase):
             version=self.version,
             deps=self.deps,
             kind=self.artifact_kind,
-            run=self.run,
+            run=self.run_fn(),
             params_fingerprint=self.eeg_spectrogram_params_fingerprint,
         )
 

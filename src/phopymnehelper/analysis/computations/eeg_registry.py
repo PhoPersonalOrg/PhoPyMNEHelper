@@ -18,7 +18,7 @@ from phopymnehelper.analysis.computations.specific.mental_states import FrameMen
 # xdf_file_name: TypeAlias = str # a name of the xdf file corresponding to a given session
 # EEGComputationId: TypeAlias = Literal["time_independent_bad_channels", "bad_epochs", "raw_data_topo", "cwt", "spectogram"]
 
-EEG_COMPUTATION_IDS_ORDERED: Tuple[types.EEGComputationId, ...] = ("time_independent_bad_channels", "bad_epochs", "raw_data_topo", "cwt", "spectogram")
+EEG_COMPUTATION_IDS_ORDERED: Tuple[types.EEGComputationId, ...] = ("time_independent_bad_channels", "bad_epochs", "raw_data_topo", "cwt", "spectogram", "amph_peri_event_spectrogram")
 
 
 _EEG_NODES_REGISTERED = False
@@ -95,17 +95,18 @@ class EEGComputationRegistryHelper:
 
 
     @classmethod
-    def run_eeg_computations_graph(cls, raw: Any, session: SessionFingerprint, global_params: Optional[Mapping[str, Any]] = None, goals: Optional[Sequence[types.EEGComputationId]] = None, registry: Optional[ComputationRegistry] = None, cache: Optional[DiskComputationCache] = None, use_cache: bool = True, parallel: bool = False, max_workers: int = 4) -> Dict[str, Any]:
+    def run_eeg_computations_graph(cls, raw: Any, session: SessionFingerprint, global_params: Optional[Mapping[str, Any]] = None, goals: Optional[Sequence[types.EEGComputationId]] = None, registry: Optional[ComputationRegistry] = None, cache: Optional[DiskComputationCache] = None, use_cache: bool = True, parallel: bool = False, max_workers: int = 4, extras: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
         reg = registry
         if reg is None:
             reg = cls.ensure_default_eeg_registry()
         else:
-            if not reg.has("spectogram") or not reg.has("bad_epochs") or not reg.has("theta_delta_sleep_intrusion") or (not reg.has("frontal_midline_theta")) or (not reg.has("jaw_clench_probability")) or (not reg.has("mental_states")):
+            if not reg.has("spectogram") or not reg.has("bad_epochs") or not reg.has("theta_delta_sleep_intrusion") or (not reg.has("frontal_midline_theta")) or (not reg.has("jaw_clench_probability")) or (not reg.has("mental_states")) or (not reg.has("amph_peri_event_spectrogram")):
                 cls.register_eeg_computation_nodes(reg)
         g = tuple(goals) if goals is not None else EEG_COMPUTATION_IDS_ORDERED
-        ctx = RunContext(session=session, raw=raw)
+        ctx = RunContext(session=session, raw=raw, extras=dict(extras or {}))
         ex = GraphExecutor(reg, cache)
         return ex.run(ctx, g, global_params=global_params, use_cache=use_cache and cache is not None, parallel=parallel, max_workers=max_workers)
+
 
 
     @classmethod

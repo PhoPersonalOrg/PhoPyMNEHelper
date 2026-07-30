@@ -105,14 +105,33 @@ def test_compute_no_events_in_window():
     assert result["Sxx_pre_mean"].size == 0
 
 
-def test_compute_raises_without_dose_events_in_extras():
+def test_compute_without_dose_events_defaults_to_empty():
     spec = _make_synthetic_spectrogram()
     ctx = RunContext(session=SessionFingerprint(canonical_path="/fake/session.xdf"), raw=None, extras={})
     dep_outputs = {"spectogram": spec}
 
     comp = AmphPeriEventSpectrogramComputation()
-    with pytest.raises(ValueError, match="amph_dose_t_unix"):
-        comp.compute(ctx, {}, dep_outputs)
+    result = comp.compute(ctx, {}, dep_outputs)
+    assert result["n_events"] == 0
+    assert len(result["peri_slices"]) == 0
+
+
+def test_compute_fallback_to_amph_events_in_extras():
+    spec = _make_synthetic_spectrogram(n_ch=2, n_freqs=32, n_times=600, hop_s=4.0)
+    t_unix = spec["t_unix"]
+    dose_t = float(t_unix[150])
+
+    class FakeEvent:
+        def __init__(self, t):
+            self.t_unix = t
+
+    ctx = RunContext(session=SessionFingerprint(canonical_path="/fake/session.xdf"), raw=None, extras={"amph_events": [FakeEvent(dose_t)]})
+    dep_outputs = {"spectogram": spec}
+
+    comp = AmphPeriEventSpectrogramComputation()
+    result = comp.compute(ctx, {"pre_s": 60.0, "post_s": 120.0}, dep_outputs)
+    assert result["n_events"] == 1
+    assert len(result["peri_slices"]) == 1
 
 
 def test_compute_raises_without_spectrogram():

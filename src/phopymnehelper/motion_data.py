@@ -58,6 +58,7 @@ class MotionData:
         """ finds periods of high acceleration in the dataset and returns annotations for those periods.
 
         ``minimum_bad_duration`` is in seconds when the epoch ``duration`` column is numeric or ``timedelta64`` (compared via total seconds).
+        ``total_change_threshold`` is accepted as an alias for ``total_accel_threshold`` (call-site compatibility).
 
         Usage:
             from phopymnehelper.motion_data import MotionData
@@ -75,6 +76,9 @@ class MotionData:
 
         """
         from phopymnehelper.MNE_helpers import MNEHelpers
+
+        if "total_change_threshold" in set_annotations_kwargs:
+            total_accel_threshold = float(set_annotations_kwargs.pop("total_change_threshold"))
 
         if not isinstance(a_ds, pd.DataFrame):
             meas_date = deepcopy(a_ds.info['meas_date'])
@@ -530,6 +534,17 @@ class BadMotionDataFrame(CommonDataFrameAccessorMixin):
             return float(datetime_to_unix_timestamp(x))
         return float(x)
 
+
+    @classmethod
+    def _duration_to_seconds(cls, x: Any) -> float:
+        """Coerce Timedelta or numeric duration to float seconds."""
+        if isinstance(x, (pd.Timedelta,)):
+            return float(x.total_seconds())
+        if hasattr(x, "total_seconds") and not isinstance(x, (float, int, np.floating, np.integer)):
+            return float(x.total_seconds())
+        return float(x)
+
+
     @classmethod
     def _detail_t_column_to_unix_numpy(cls, t_col: pd.Series) -> np.ndarray:
         if pd.api.types.is_datetime64_any_dtype(t_col):
@@ -541,11 +556,14 @@ class BadMotionDataFrame(CommonDataFrameAccessorMixin):
     def motion_bad_intervals_key_suffix(cls, bad_unix_df: pd.DataFrame) -> str:
         if bad_unix_df is None or len(bad_unix_df) == 0:
             return ''
+        has_unix = np.all([v in bad_unix_df.columns for v in cls.timestamp_dt_column_names])
         is_timestamp_format: bool = np.all([v in bad_unix_df.columns for v in cls.timestamp_rel_column_names])
-        if is_timestamp_format:
-            rows = sorted((round(cls._motion_bad_cell_to_unix_seconds(r.onset), 6), round(float(r.duration.total_seconds()), 6)) for r in bad_unix_df.itertuples(index=False))
+        if has_unix:
+            rows = sorted((round(float(r.t_start), 6), round(cls._duration_to_seconds(r.t_duration), 6)) for r in bad_unix_df.itertuples(index=False))
+        elif is_timestamp_format:
+            rows = sorted((round(cls._motion_bad_cell_to_unix_seconds(r.onset), 6), round(cls._duration_to_seconds(r.duration), 6)) for r in bad_unix_df.itertuples(index=False))
         else:
-            rows = sorted((round(float(r.t_start), 6), round(float(r.t_duration), 6)) for r in bad_unix_df.itertuples(index=False))
+            raise ValueError("bad_unix_df must have columns ('t_start', 't_duration') or ('onset', 'duration').")
         return hashlib.md5(repr(rows).encode('utf-8')).hexdigest()[:12]
 
 
@@ -555,23 +573,27 @@ class BadMotionDataFrame(CommonDataFrameAccessorMixin):
 
         Accepts either timeline-style columns ``t_start``/``t_duration`` (Unix seconds or datetimes), or MNE-style
         ``onset``/``duration`` (seconds relative to recording start) plus ``time_origin_unix`` (recording start, Unix s).
+        When both column pairs are present (e.g. after ``adding_unix_float_columns``), prefers the unix float columns.
         """
         if bad_df is None or len(bad_df) == 0:
             return pd.DataFrame(columns=cls.timestamp_dt_column_names)
         df = bad_df.copy()
-        
-        if 'onset' in df.columns and 'duration' in df.columns:
-            # if time_origin_unix is None:
-            #     raise ValueError("bad_intervals_df uses MNE columns 'onset' and 'duration'; pass bad_intervals_time_origin_unix (recording start as Unix seconds).")
-            # return pd.DataFrame({'t_start': time_origin_unix + df['onset'].astype(float), 't_duration': df['duration'].astype(float)}).reset_index(drop=True)
-            return df
+        has_unix = ('t_start' in df.columns) and ('t_duration' in df.columns)
+        has_mne = ('onset' in df.columns) and ('duration' in df.columns)
 
-        elif 't_start' in df.columns and 't_duration' in df.columns:
+        if has_unix:
             t_st = df['t_start'].map(cls._motion_bad_cell_to_unix_seconds)
-            t_du = df['t_duration'].astype(float)
+            t_du = df['t_duration'].map(cls._duration_to_seconds)
             return pd.DataFrame({'t_start': t_st, 't_duration': t_du}).reset_index(drop=True)
-        else:
-            raise ValueError("bad_intervals_df must have columns ('t_start', 't_duration') or ('onset', 'duration').")
+
+        if has_mne:
+            t_st = df['onset'].map(cls._motion_bad_cell_to_unix_seconds)
+            if time_origin_unix is not None:
+                t_st = t_st + float(time_origin_unix)
+            t_du = df['duration'].map(cls._duration_to_seconds)
+            return pd.DataFrame({'t_start': t_st, 't_duration': t_du}).reset_index(drop=True)
+
+        raise ValueError("bad_intervals_df must have columns ('t_start', 't_duration') or ('onset', 'duration').")
 
 
     def adding_unix_float_columns(self, inplace: bool=True) -> pd.DataFrame:

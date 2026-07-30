@@ -560,7 +560,7 @@ class EntireDayMergedData:
 
     def run_batch_computations(
         self,
-        goals: Sequence[str],
+        goals: Optional[Sequence[str]] = None,
         global_params: Optional[Mapping[str, Any]] = None,
         use_cache: bool = True,
         cache_root: Optional[Path] = None,
@@ -568,7 +568,16 @@ class EntireDayMergedData:
         max_session_workers: int = 4,
     ) -> Any:
         """Run batch DAG computations across all loaded sessions using BatchSessionExecutor."""
-        from phopymnehelper.analysis.computations import BatchResultsAggregator, BatchSessionExecutor, DiskComputationCache, EEGComputationRegistryHelper, LoadedSessionContext
+        from phopymnehelper.analysis.computations import (
+            EEG_COMPUTATION_IDS_ORDERED,
+            BatchResultsAggregator,
+            BatchSessionExecutor,
+            DiskComputationCache,
+            EEGComputationRegistryHelper,
+            LoadedSessionContext,
+        )
+
+        effective_goals = tuple(goals) if goals is not None else EEG_COMPUTATION_IDS_ORDERED
 
         if "EEG" not in self.modalities or self.modalities["EEG"].datasets is None:
             raise ValueError("No EEG datasets loaded in SavedSessionsProcessor.")
@@ -596,7 +605,7 @@ class EntireDayMergedData:
         executor = BatchSessionExecutor(cache=cache, use_cache=use_cache)
         results = executor.run_batch(
             session_contexts=contexts,
-            goals=goals,
+            goals=effective_goals,
             global_params=global_params,
             parallel_sessions=parallel_sessions,
             max_session_workers=max_session_workers,

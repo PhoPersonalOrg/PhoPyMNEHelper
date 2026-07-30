@@ -168,7 +168,7 @@ class BadEpochsQCComputation(SpecificComputationBase):
             version=self.version,
             deps=self.deps,
             kind=self.artifact_kind,
-            run=self.run,
+            run=self.run_fn(),
             params_fingerprint=self.bad_epochs_qc_params_fingerprint,
         )
 
