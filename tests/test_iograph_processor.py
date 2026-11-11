@@ -32,6 +32,21 @@ def test_parsed_filename_dt_range_dated() -> None:
     assert dt_end == pd.Timestamp("2026-05-12 00:16:00")
 
 
+def test_parsed_filename_dt_range_absolute() -> None:
+    name = "IOGraphica - 2026-11-09_12-34-12_14.8083h.csv"
+    dt_start, dt_end = IOGraphProcessor._parsed_filename_dt_range(name, pd.NaT)
+    assert dt_start == pd.Timestamp("2026-11-09 12:34:12")
+    assert dt_end == dt_start + pd.Timedelta(hours=14.8083)
+
+
+def test_parsed_filename_dt_range_absolute_sample_basename() -> None:
+    sample = Path(__file__).resolve().parents[2] / "IOGraph" / "data" / "test_output" / "IOGraphica - 2026-11-09_12-34-12_14.8083h.csv"
+    name = sample.name if sample.exists() else "IOGraphica - 2026-11-09_12-34-12_14.8083h.csv"
+    dt_start, dt_end = IOGraphProcessor._parsed_filename_dt_range(name, pd.NaT)
+    assert dt_start == pd.Timestamp("2026-11-09 12:34:12")
+    assert dt_end == dt_start + pd.Timedelta(hours=14.8083)
+
+
 def test_overlapping_files_merge_and_dedupe() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -68,6 +83,31 @@ def test_incremental_saves_same_start_shorter_wins() -> None:
         tail_rows = master_df[master_df["x"] == 40.0]
         assert len(tail_rows) == 1
         assert tail_rows.iloc[0]["source_file_name"] == long_path.name
+
+
+def test_absolute_incremental_saves_same_start_shorter_wins() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        mtime = pd.Timestamp("2026-11-09 20:00:00")
+        short_path = root / "IOGraphica - 2026-11-09_10-00-00_0.5000h.csv"
+        long_path = root / "IOGraphica - 2026-11-09_10-00-00_1.0000h.csv"
+        _write_csv(short_path, [0, 900_000, 1_800_000], [1.0, 2.0, 3.0], [4.0, 5.0, 6.0], mtime)
+        _write_csv(long_path, [0, 900_000, 1_800_000, 3_600_000], [10.0, 20.0, 30.0, 40.0], [40.0, 50.0, 60.0, 70.0], mtime)
+        file_table, _ = IOGraphProcessor.scan_csv_directory(root, recursive=False)
+        assert file_table["parsed_filename_dt_start"].notna().all()
+        master_df, _ = IOGraphProcessor.build_master_df(file_table, drop_na_coords=True)
+        assert master_df["session_index"].nunique() == 1
+        assert master_df.duplicated(subset=["session_index", "sample_time"]).sum() == 0
+        overlap_time = pd.Timestamp("2026-11-09 10:15:00")
+        overlap_rows = master_df[master_df["sample_time"] == overlap_time]
+        assert len(overlap_rows) == 1
+        assert overlap_rows.iloc[0]["source_file_name"] == short_path.name
+        assert overlap_rows.iloc[0]["x"] == 2.0
+        tail_time = pd.Timestamp("2026-11-09 11:00:00")
+        tail_rows = master_df[master_df["sample_time"] == tail_time]
+        assert len(tail_rows) == 1
+        assert tail_rows.iloc[0]["source_file_name"] == long_path.name
+        assert tail_rows.iloc[0]["x"] == 40.0
 
 
 def test_master_df_to_detail_and_intervals() -> None:

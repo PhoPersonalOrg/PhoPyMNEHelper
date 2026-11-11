@@ -13,6 +13,10 @@ from phopylslhelper.datetime_helpers import DISPLAY_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
+_IOGRAPH_FILENAME_ABSOLUTE_RE = re.compile(
+    r"(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})_(\d+(?:\.\d+)?)h",
+    re.IGNORECASE,
+)
 _IOGRAPH_FILENAME_TIME_RANGE_RE = re.compile(r"\(from\s+(\d{1,2})-(\d{2})\s+to\s+(\d{1,2})-(\d{2})\)", re.IGNORECASE)
 _IOGRAPH_FILENAME_TIME_RANGE_DATED_RE = re.compile(r"\(from\s+(\d{1,2})-(\d{2})\s+([A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?)\s+to\s+(\d{1,2})-(\d{2})\s+([A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?)\)", re.IGNORECASE)
 
@@ -87,6 +91,13 @@ class IOGraphProcessor:
             cleaned = re.sub(r"(\d+)(st|nd|rd|th)\b", r"\1", day_label.strip(), flags=re.IGNORECASE)
             return pd.to_datetime(f"{cleaned} {year}", format="%b %d %Y")
 
+        absolute_match = _IOGRAPH_FILENAME_ABSOLUTE_RE.search(file_name)
+        if absolute_match is not None:
+            date_part, hour, minute, second, duration_h = absolute_match.groups()
+            dt_start = pd.Timestamp(f"{date_part} {hour}:{minute}:{second}")
+            dt_end = dt_start + pd.Timedelta(hours=float(duration_h))
+            return dt_start, dt_end
+
         if pd.isna(modified_datetime):
             return pd.NaT, pd.NaT
         year = pd.Timestamp(modified_datetime).year
@@ -118,8 +129,25 @@ class IOGraphProcessor:
         if results_df.empty:
             return pd.DataFrame({"parsed_filename_dt_start": starts, "parsed_filename_dt_end": ends})
 
+        absolute_extracted = results_df["file_name"].str.extract(_IOGRAPH_FILENAME_ABSOLUTE_RE)
+        absolute_valid = absolute_extracted[0].notna()
+        if absolute_valid.any():
+            absolute_idx = absolute_extracted.index[absolute_valid]
+            date_part = absolute_extracted.loc[absolute_valid, 0]
+            hour = absolute_extracted.loc[absolute_valid, 1]
+            minute = absolute_extracted.loc[absolute_valid, 2]
+            second = absolute_extracted.loc[absolute_valid, 3]
+            duration_h = absolute_extracted.loc[absolute_valid, 4].astype(float)
+            dt_start = pd.to_datetime(
+                date_part + " " + hour + ":" + minute + ":" + second,
+                format="%Y-%m-%d %H:%M:%S",
+            )
+            dt_end = dt_start + pd.to_timedelta(duration_h, unit="h")
+            starts.loc[absolute_idx] = dt_start.values
+            ends.loc[absolute_idx] = dt_end.values
+
         valid_mod = results_df["modified_datetime"].notna()
-        dated_mask = results_df["file_name"].apply(_IOGRAPH_FILENAME_TIME_RANGE_DATED_RE.search).notna() & valid_mod
+        dated_mask = results_df["file_name"].apply(_IOGRAPH_FILENAME_TIME_RANGE_DATED_RE.search).notna() & valid_mod & starts.isna()
         if dated_mask.any():
             for idx in results_df.index[dated_mask]:
                 dt_start, dt_end = cls._parsed_filename_dt_range(
