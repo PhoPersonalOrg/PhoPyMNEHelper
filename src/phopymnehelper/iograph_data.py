@@ -210,11 +210,53 @@ class IOGraphProcessor:
         def _subfn_intervals_overlap(start_a: pd.Timestamp, end_a: pd.Timestamp, start_b: pd.Timestamp, end_b: pd.Timestamp) -> bool:
             return start_a < end_b and start_b < end_a
 
+        def _subfn_drop_shorter_absolute_same_start(session_table: pd.DataFrame) -> pd.DataFrame:
+            """Keep only the longest absolute-format export per exact parsed start.
+
+            Absolute names encode a reliable same-instance start stamp; later saves are supersets.
+            Legacy from-to names are left unchanged.
+            """
+            if session_table.empty:
+                return session_table
+            name_col = "file_name" if "file_name" in session_table.columns else None
+            if name_col is None:
+                names = session_table["file_path"].map(lambda p: Path(p).name)
+            else:
+                names = session_table[name_col].astype(str)
+            is_absolute = names.map(lambda n: _IOGRAPH_FILENAME_ABSOLUTE_RE.search(n) is not None)
+            if not bool(is_absolute.any()):
+                return session_table
+            absolute_rows = session_table.loc[is_absolute].copy()
+            legacy_rows = session_table.loc[~is_absolute].copy()
+            for col in ("size_bytes", "modified_datetime"):
+                if col not in absolute_rows.columns:
+                    absolute_rows[col] = 0 if col == "size_bytes" else pd.NaT
+            ## END for col in ("size_bytes", "modified_datetime")...
+
+            absolute_rows = absolute_rows.sort_values(
+                ["parsed_filename_dt_start", "parsed_filename_dt_end", "size_bytes", "modified_datetime"],
+                ascending=[True, False, False, False],
+                kind="stable",
+            )
+            kept_absolute = absolute_rows.drop_duplicates(subset=["parsed_filename_dt_start"], keep="first")
+            dropped = absolute_rows.loc[~absolute_rows.index.isin(kept_absolute.index)]
+            if not dropped.empty:
+                dropped_names = dropped[name_col].tolist() if name_col is not None else [Path(p).name for p in dropped["file_path"]]
+                kept_names = kept_absolute[name_col].tolist() if name_col is not None else [Path(p).name for p in kept_absolute["file_path"]]
+                logger.info(
+                    "Dropped %s shorter absolute same-start export(s) in favor of longest: dropped=%s kept=%s",
+                    len(dropped_names),
+                    ", ".join(dropped_names),
+                    ", ".join(kept_names),
+                )
+            return pd.concat([kept_absolute, legacy_rows], axis=0, ignore_index=True)
+
+
         def _subfn_assign_session_groups(session_table: pd.DataFrame) -> pd.DataFrame:
             """Merge files whose filename intervals overlap; rank by earliest snapshot for dedupe.
 
-            IOGraph sessions are often saved incrementally (same start, growing end). Overlapping
-            sample_time rows keep data from the earliest/shorter export.
+            Absolute same-start supersets are removed upstream. Remaining overlaps (typically
+            legacy from-to names) keep data from the earliest/shorter export on duplicate sample_time.
             """
 
             n = len(session_table)
@@ -266,6 +308,7 @@ class IOGraphProcessor:
         session_table["parsed_filename_dt_start"] = pd.to_datetime(session_table["parsed_filename_dt_start"])
         session_table["parsed_filename_dt_end"] = pd.to_datetime(session_table["parsed_filename_dt_end"])
         session_table = session_table.sort_values("parsed_filename_dt_start", kind="stable").reset_index(drop=True)
+        session_table = _subfn_drop_shorter_absolute_same_start(session_table)
         session_table = _subfn_assign_session_groups(session_table)
         parts: list[pl.DataFrame] = []
         skipped_empty = 0
@@ -280,11 +323,15 @@ class IOGraphProcessor:
             if df_pl.is_empty():
                 skipped_empty += 1
                 continue
-            t_max = df_pl.select(pl.col("time").max()).item()
-            dt_end = pd.Timestamp(row.parsed_filename_dt_end)
             time_vals = df_pl.get_column("time").to_numpy()
-            sample_times = dt_end - pd.to_timedelta(t_max - time_vals, unit="ms")
             source_file_name = getattr(row, "file_name", None) or Path(row.file_path).name
+            if _IOGRAPH_FILENAME_ABSOLUTE_RE.search(source_file_name) is not None:
+                dt_start = pd.Timestamp(row.parsed_filename_dt_start)
+                sample_times = dt_start + pd.to_timedelta(time_vals, unit="ms")
+            else:
+                t_max = df_pl.select(pl.col("time").max()).item()
+                dt_end = pd.Timestamp(row.parsed_filename_dt_end)
+                sample_times = dt_end - pd.to_timedelta(t_max - time_vals, unit="ms")
             df_pl = df_pl.select(["time", "x", "y"]).with_columns(
                 pl.Series("sample_time", sample_times),
                 pl.lit(int(row.session_index)).alias("session_index"),
