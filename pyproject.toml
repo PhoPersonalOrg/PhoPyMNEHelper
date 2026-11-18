@@ -23,6 +23,7 @@ dependencies = [
     "phopylslhelper",
     "dill>=0.3.5.1",
     "pyedflib>=0.1.42",
+    "umap-learn>=0.5.12",
 ]
 
 [tool.pyrefly]

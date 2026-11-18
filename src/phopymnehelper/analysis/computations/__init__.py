@@ -5,6 +5,7 @@ from phopymnehelper.analysis.computations.batch_executor import BatchSessionExec
 from phopymnehelper.analysis.computations.cache import DiskComputationCache
 from phopymnehelper.analysis.computations.eeg_registry import EEGComputationRegistryHelper, EEG_COMPUTATION_IDS_ORDERED
 from phopymnehelper.analysis.computations.engine import GraphExecutor
+from phopymnehelper.analysis.computations.eeg_manifold import EEGManifoldConfig, compute_eeg_manifold_from_detailed_df
 from phopymnehelper.analysis.computations.gfp_band_power import GFPBandPower
 from phopymnehelper.analysis.computations.protocol import DEFAULT_REGISTRY, ArtifactKind, ArtifactRef, ComputationNode, ComputationRegistry, PROTOCOL_VERSION, RunContext, SessionFingerprint, register_default
 from phopymnehelper.analysis.computations.session_computation import LoadedSessionContext, SessionComputationBase, SessionComputationRegistry, session_computation
@@ -34,6 +35,7 @@ __all__ = [
     "DEFAULT_REGISTRY",
     "DiskComputationCache",
     "EEGComputationRegistryHelper",
+    "EEGManifoldConfig",
     "EEG_COMPUTATION_IDS_ORDERED",
     "EEG_SPECTROGRAM_PARAM_KEYS",
     "EEGSpectrogramComputation",
@@ -42,6 +44,7 @@ __all__ = [
     "FrameMentalStatesComputation",
     "FRONTAL_MIDLINE_THETA_PARAM_KEYS",
     "GFPBandPower",
+    "compute_eeg_manifold_from_detailed_df",
     "GraphExecutor",
     "JAW_CLENCH_PROB_COLUMN",
     "JawClenchProbabilityComputation",
