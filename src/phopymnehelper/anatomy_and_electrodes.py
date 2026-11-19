@@ -111,8 +111,8 @@ class ElectrodeHelper:
         return mont
 
 
-    @staticmethod
-    def _parse_ced(ced_file_path: Path) -> Dict[str, np.ndarray]:
+    @classmethod
+    def _parse_ced(cls, ced_file_path: Path) -> Dict[str, np.ndarray]:
         """Very tolerant .ced parser: returns dict[label] = np.array([x,y,z]) (units: unknown)."""
         coords = {}
         float_re = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
@@ -139,8 +139,8 @@ class ElectrodeHelper:
         return coords
 
 
-    @staticmethod
-    def visualize_montage(montage: mne.channels.DigMontage):
+    @classmethod
+    def visualize_montage(cls, montage: mne.channels.DigMontage):
         """Simple visualization using MNE's built-in plot; opens interactive 3D viewer if available."""
         montage.plot(kind="3d")
 

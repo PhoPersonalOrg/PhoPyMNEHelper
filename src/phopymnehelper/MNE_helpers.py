@@ -181,7 +181,7 @@ class MNEHelpers:
         ## INPUTS: meas_date
         active_times = deepcopy(df[time_col_names].to_numpy())
         
-        is_bad = df[is_bad_col_name]
+        is_bad = df[is_bad_col_name].to_numpy()
         # split into contiguous segments
         idx = np.where(np.diff(is_bad.astype(int)) != 0)[0] + 1 # the +1 is to adjust for the diff operation
         segments = np.split(np.arange(len(is_bad)), idx)
@@ -388,6 +388,21 @@ class MNEHelpers:
         # Sort by columns: 't_start' (descending), 't_end' (descending)
         min_max_times_df = min_max_times_df.sort_values(['t_start', 't_end'], ascending=[True, True], key=lambda s: s.apply(str) if s.name in ['t_start', 't_end'] else s)
         return min_max_times_df
+
+
+    @classmethod
+    def up_convert_raw_obj(cls, raw_obj):
+        if isinstance(raw_obj, mne.io.RawArray):
+            raw_obj.__class__ = RawArrayExtended
+        elif isinstance(raw_obj, mne.io.Raw):
+            raw_obj.__class__ = RawExtended
+        return raw_obj
+
+
+    @classmethod
+    def up_convert_raw_objects(cls, raw_objects):
+        return [cls.up_convert_raw_obj(obj) for obj in raw_objects]
+
 
 
 
@@ -687,18 +702,6 @@ class RawArrayExtended(DatasetRawExportToConvertedFormatFileMixin, DatasetDateti
 
 
 
-
-def up_convert_raw_obj(raw_obj):
-    if isinstance(raw_obj, mne.io.RawArray):
-        raw_obj.__class__ = RawArrayExtended
-    elif isinstance(raw_obj, mne.io.Raw):
-        raw_obj.__class__ = RawExtended
-    return raw_obj
-
-
-
-def up_convert_raw_objects(raw_objects):
-    return [up_convert_raw_obj(obj) for obj in raw_objects]
 
 
 # datasets = []

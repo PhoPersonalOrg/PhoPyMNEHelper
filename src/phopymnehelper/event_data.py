@@ -250,6 +250,34 @@ class EventData(HistoricalData):
         return all_dfs
 
 
+    # Common Whisper hallucination / empty-transcript phrases (compared casefold + whitespace-normalized).
+    COMMON_WHISPER_ERROR_TRANSCRIPTIONS: Tuple[str, ...] = (
+        '...',
+        'Thanks for watching!',
+    )
+
+    @classmethod
+    def drop_common_error_transcriptions(cls, whisper_df: pd.DataFrame, description_col: str = 'description', error_phrases: Optional[Tuple[str, ...]] = None) -> pd.DataFrame:
+        """Drop rows whose ``description`` matches known Whisper error / hallucination phrases.
+
+        Matching is case-insensitive and ignores extra internal whitespace (e.g. ``Thanks  for  watching!``).
+        """
+        if whisper_df is None or len(whisper_df) == 0:
+            return whisper_df
+
+        if description_col not in whisper_df.columns:
+            raise KeyError(f'drop_common_error_transcriptions: missing column {description_col!r}')
+
+        phrases = error_phrases if error_phrases is not None else cls.COMMON_WHISPER_ERROR_TRANSCRIPTIONS
+
+        def _subfn_normalize_phrase(text: object) -> str:
+            return ' '.join(str(text).split()).casefold()
+
+        banned = {_subfn_normalize_phrase(p) for p in phrases}
+        normalized = whisper_df[description_col].map(_subfn_normalize_phrase)
+        keep_mask = ~normalized.isin(banned)
+        return whisper_df.loc[keep_mask].reset_index(drop=True)
+
     @classmethod
     def perform_fixup_WHISPER_annotation_df(cls, all_WHISPER_df: pd.DataFrame, WHISPER_idx_col_name: str='WHISPER_idx') -> pd.DataFrame:
         """ Called by `cls.complete_correct_WHISPER_annotation_df(...)
@@ -281,7 +309,9 @@ class EventData(HistoricalData):
             .drop("__group", "__len")
         )
         dedup_WHISPER_df = out.to_pandas()
+        dedup_WHISPER_df = cls.drop_common_error_transcriptions(dedup_WHISPER_df)
         return dedup_WHISPER_df
+
 
     @classmethod
     def complete_correct_WHISPER_annotation_df(cls, a_logging_modality, **kwargs) -> pd.DataFrame:

@@ -5,7 +5,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import dill
 
-from typing import Dict, List, Tuple, Optional, Callable, Any
+from typing import Dict, List, Tuple, Optional, Callable, Any, Sequence, Mapping
 
 from pathlib import Path
 import pandas as pd
@@ -385,11 +385,11 @@ class SavedSessionsProcessor:
         written_EDF_file_paths = sso.save_to_EDF()
         
         """
-        from phopymnehelper.MNE_helpers import up_convert_raw_objects
+        from phopymnehelper.MNE_helpers import MNEHelpers
 
         edf_export_parent_path.mkdir(exist_ok=True)
         (all_data_EEG, all_times_EEG), datasets_EEG, df_EEG = self.flat_data_modality_dict['EEG']  ## Unpacking
-        datasets_EEG = up_convert_raw_objects(datasets_EEG) ## upconvert
+        datasets_EEG = MNEHelpers.up_convert_raw_objects(datasets_EEG) ## upconvert
         written_EDF_file_paths = []
         for i, raw_eeg in enumerate(datasets_EEG):
             ## INPUTS: raw_eeg
@@ -497,7 +497,7 @@ class EntireDayMergedData:
         Returns:
             mne.io.Raw: Merged Raw dataset for the specified date.
         """
-        from phopymnehelper.MNE_helpers import up_convert_raw_objects, up_convert_raw_obj
+        from phopymnehelper.MNE_helpers import MNEHelpers
 
         if "EEG" not in sso.modalities:
             raise ValueError("The SavedSessionsProcessor does not contain any EEG modality data.")
@@ -508,11 +508,11 @@ class EntireDayMergedData:
         if not today_only_eeg_modality.datasets:
             raise ValueError(f"No EEG datasets found for the date {search_day_date.date()}.")
 
-        today_only_eeg_modality.datasets = up_convert_raw_objects(today_only_eeg_modality.datasets)
+        today_only_eeg_modality.datasets = MNEHelpers.up_convert_raw_objects(today_only_eeg_modality.datasets)
         ## Flatten the EEG sessions into a single dataset for the entire day
         # concatenated_raw = cls.concatenate_datasets(today_only_eeg_modality.datasets)
         concatenated_raw = cls.concatenate_with_gaps(today_only_eeg_modality.datasets)
-        concatenated_raw = up_convert_raw_obj(concatenated_raw)
+        concatenated_raw = MNEHelpers.up_convert_raw_obj(concatenated_raw)
 
         ## convert to day-specific version:
         if save_fif:
@@ -557,5 +557,58 @@ class EntireDayMergedData:
             print(f'save_edf is False so skipping save.')
 
         return concatenated_raw
-    
 
+    def run_batch_computations(
+        self,
+        goals: Optional[Sequence[str]] = None,
+        global_params: Optional[Mapping[str, Any]] = None,
+        use_cache: bool = True,
+        cache_root: Optional[Path] = None,
+        parallel_sessions: bool = True,
+        max_session_workers: int = 4,
+    ) -> Any:
+        """Run batch DAG computations across all loaded sessions using BatchSessionExecutor."""
+        from phopymnehelper.analysis.computations import (
+            EEG_COMPUTATION_IDS_ORDERED,
+            BatchResultsAggregator,
+            BatchSessionExecutor,
+            DiskComputationCache,
+            EEGComputationRegistryHelper,
+            LoadedSessionContext,
+        )
+
+        effective_goals = tuple(goals) if goals is not None else EEG_COMPUTATION_IDS_ORDERED
+
+        if "EEG" not in self.modalities or self.modalities["EEG"].datasets is None:
+            raise ValueError("No EEG datasets loaded in SavedSessionsProcessor.")
+
+        eeg_datasets = self.modalities["EEG"].datasets
+        motion_datasets = self.modalities.get("MOTION", SessionModality()).datasets or [None] * len(eeg_datasets)
+
+        cache = DiskComputationCache(cache_root) if (use_cache and cache_root is not None) else None
+        contexts: List[LoadedSessionContext] = []
+
+        for idx, eeg_raw in enumerate(eeg_datasets):
+            if eeg_raw is None:
+                continue
+            session_fp = EEGComputationRegistryHelper.session_fingerprint_for_raw_or_path(eeg_raw)
+            motion_raw = motion_datasets[idx] if idx < len(motion_datasets) else None
+            ctx = LoadedSessionContext(
+                session=session_fp,
+                eeg_raw=eeg_raw,
+                motion_raw=motion_raw,
+                metadata={"session_idx": idx},
+            )
+            contexts.append(ctx)
+        ## END for idx, eeg_raw in enumerate...
+
+        executor = BatchSessionExecutor(cache=cache, use_cache=use_cache)
+        results = executor.run_batch(
+            session_contexts=contexts,
+            goals=effective_goals,
+            global_params=global_params,
+            parallel_sessions=parallel_sessions,
+            max_session_workers=max_session_workers,
+        )
+
+        return BatchResultsAggregator(results)

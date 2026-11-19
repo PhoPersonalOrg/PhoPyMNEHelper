@@ -191,31 +191,20 @@ class EEGComputations:
 
 
     @classmethod
-    def run_all(cls, raw, should_suppress_exceptions: bool=True, **kwargs):
-        _all_outputs = {}
-        _all_fns = cls.all_fcns_dict()
-        for a_fn_name, a_fn in _all_fns.items():
-            print(f'running {a_fn_name}...')
-            try:
-                _all_outputs[a_fn_name] = a_fn(raw, **kwargs)
-                print(f'\tdone.')
-            except Exception as e:
-                print(f'\terror occured in {a_fn_name}: error {e}.')
-                if not should_suppress_exceptions:
-                    raise
-            
-        return _all_outputs
+    def run_all(cls, raw, should_suppress_exceptions: bool=True, use_cache: bool=False, cache_root: Optional[Path]=None, **kwargs):
+        """Run all EEG computations via DAG graph execution."""
+        return cls.run_all_with_graph(raw=raw, should_suppress_exceptions=should_suppress_exceptions, use_cache=use_cache, cache_root=cache_root, **kwargs)
 
 
     @classmethod
     def run_all_with_graph(cls, raw, should_suppress_exceptions: bool = True, use_cache: bool = False, cache_root: Optional[Path] = None, session_path: Optional[Path] = None, session_mtime: Optional[float] = None, parallel: bool = False, max_workers: int = 4, **kwargs):
         """Run the same computations as ``all_fcns_dict`` via the DAG executor (ordered dict compatible with ``run_all``). Optional per-node disk cache under *cache_root*."""
         from phopymnehelper.analysis.computations.cache import DiskComputationCache
-        from phopymnehelper.analysis.computations.eeg_registry import run_eeg_graph_legacy_ordered, session_fingerprint_for_raw_or_path
+        from phopymnehelper.analysis.computations.eeg_registry import EEGComputationRegistryHelper
         try:
-            session = session_fingerprint_for_raw_or_path(raw, path=session_path, mtime=session_mtime)
+            session = EEGComputationRegistryHelper.session_fingerprint_for_raw_or_path(raw, path=session_path, mtime=session_mtime)
             cache = DiskComputationCache(Path(cache_root)) if (use_cache and cache_root is not None) else None
-            return run_eeg_graph_legacy_ordered(raw=raw, session=session, global_params=kwargs, cache=cache, use_cache=use_cache, parallel=parallel, max_workers=max_workers)
+            return EEGComputationRegistryHelper.run_eeg_graph_legacy_ordered(raw=raw, session=session, global_params=kwargs, cache=cache, use_cache=use_cache, parallel=parallel, max_workers=max_workers)
         except Exception as e:
             print(f'run_all_with_graph error: {e}.')
             if not should_suppress_exceptions:

@@ -24,7 +24,7 @@ class SpecificComputationBase(ABC):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
-        if getattr(cls, "__abstractmethods__", frozenset()):
+        if getattr(cls, "__abstractmethods__", frozenset()) or cls.__name__.endswith("Base"):
             return
         if not getattr(cls, "computation_id", "") or not getattr(cls, "version", ""):
             raise TypeError(f"{cls.__qualname__} must define non-empty class attributes computation_id and version")

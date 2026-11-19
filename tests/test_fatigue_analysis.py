@@ -1,14 +1,14 @@
 import pytest
 import mne
 import numpy as np
-from phopymnehelper.analysis.computations.specific.fatigue_analysis import compute_fatigue_metrics, analyze_fatigue_trends
+from phopymnehelper.analysis.computations.specific.fatigue_analysis import FatigueAnalysis
 
 def test_compute_fatigue_metrics():
     info = mne.create_info(ch_names=['eeg1', 'eeg2'], sfreq=256, ch_types=['eeg', 'eeg'])
     data = np.random.randn(2, 256 * 120)  # 120 seconds of data
     raw = mne.io.RawArray(data, info)
 
-    result = compute_fatigue_metrics(raw, duration=60, overlap=0.5)
+    result = FatigueAnalysis.compute_fatigue_metrics(raw, duration=60, overlap=0.5)
 
     assert result is not None
     assert 'metrics' in result
@@ -24,12 +24,13 @@ def test_analyze_fatigue_trends():
     data = np.random.randn(2, 256 * 120)  # 120 seconds of data
     raw = mne.io.RawArray(data, info)
 
-    result = compute_fatigue_metrics(raw, duration=60, overlap=0.5)
+    result = FatigueAnalysis.compute_fatigue_metrics(raw, duration=60, overlap=0.5)
     metrics_dict = result['metrics']
     time_points = result['epoch_times']
 
-    trends = analyze_fatigue_trends(metrics_dict, time_points)
+    trends = FatigueAnalysis.analyze_fatigue_trends(metrics_dict, time_points)
 
     assert trends is not None
     assert 'theta_alpha_ratio_global' in trends
     assert 'engagement_index' in trends
+

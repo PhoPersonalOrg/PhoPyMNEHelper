@@ -6,10 +6,10 @@ import numpy as np
 import pandas as pd
 
 from phopymnehelper.analysis.computations.specific.mental_states import (
+    FRAME_MENTAL_STATE_BANDS,
     MENTAL_STATE_COLUMNS,
+    FrameMentalStatesComputation,
     MentalStatesRollingState,
-    compute_frame_mental_states_from_detailed_df,
-    compute_frame_mental_states_series,
 )
 
 
@@ -42,7 +42,7 @@ class TestMentalStatesComputation(unittest.TestCase):
         n = int(sfreq * 3)
         alpha_sig = _sine_band(10.0, sfreq, n, amplitude=2.0)
         data = np.stack([alpha_sig, alpha_sig * 0.5], axis=0)
-        result = compute_frame_mental_states_series(data, sfreq, window_sec=1.0, step_sec=0.5)
+        result = FrameMentalStatesComputation.compute_frame_mental_states_series(data, sfreq, window_sec=1.0, step_sec=0.5)
         self.assertGreater(result["n_windows"], 0)
         for c in MENTAL_STATE_COLUMNS:
             self.assertEqual(result[c].shape, result["times"].shape)
@@ -54,7 +54,7 @@ class TestMentalStatesComputation(unittest.TestCase):
         ch_a = _sine_band(10.0, sfreq, n)
         ch_b = _sine_band(6.0, sfreq, n)
         df = pd.DataFrame({"t": t, "AF3": ch_a, "F3": ch_b})
-        out = compute_frame_mental_states_from_detailed_df(df, ["AF3", "F3"], sfreq, window_sec=1.0, step_sec=0.5, incremental=False)
+        out = FrameMentalStatesComputation.compute_frame_mental_states_from_detailed_df(df, ["AF3", "F3"], sfreq, window_sec=1.0, step_sec=0.5, incremental=False)
         self.assertGreater(len(out), 0)
         for c in MENTAL_STATE_COLUMNS:
             self.assertIn(c, out.columns)
@@ -68,12 +68,13 @@ class TestMentalStatesComputation(unittest.TestCase):
         data = np.stack([sig, sig], axis=0)
         t_unix = np.arange(n, dtype=float) / sfreq + 5000.0
         state = MentalStatesRollingState()
-        r1 = compute_frame_mental_states_series(data, sfreq, t_unix=t_unix, window_sec=1.0, step_sec=0.5, state=state, incremental=False)
+        r1 = FrameMentalStatesComputation.compute_frame_mental_states_series(data, sfreq, t_unix=t_unix, window_sec=1.0, step_sec=0.5, state=state, incremental=False)
         n1 = r1["times"].size
         self.assertGreater(n1, 0)
-        r2 = compute_frame_mental_states_series(data, sfreq, t_unix=t_unix, window_sec=1.0, step_sec=0.5, state=state, incremental=True)
+        r2 = FrameMentalStatesComputation.compute_frame_mental_states_series(data, sfreq, t_unix=t_unix, window_sec=1.0, step_sec=0.5, state=state, incremental=True)
         self.assertEqual(r2["times"].size, 0)
 
 
 if __name__ == "__main__":
     unittest.main()
+

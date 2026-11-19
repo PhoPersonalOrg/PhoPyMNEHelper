@@ -1090,8 +1090,8 @@ class PhoDataframeAccessor:
         self._validate(pandas_obj)
         self._df = pandas_obj
 
-    @staticmethod
-    def _validate(obj):
+    @classmethod
+    def _validate(cls, obj):
         """ verify there is a column that identifies the spike's neuron, the type of cell of this neuron ('neuron_type'), and the timestamp at which each spike occured ('t'||'t_rel_seconds') """
         if not isinstance(obj, pd.DataFrame):
             raise ValueError(f"object must be a pandas Dataframe but is of type: {type(obj)}!\nobj: {obj}")

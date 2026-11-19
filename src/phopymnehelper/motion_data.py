@@ -58,6 +58,7 @@ class MotionData:
         """ finds periods of high acceleration in the dataset and returns annotations for those periods.
 
         ``minimum_bad_duration`` is in seconds when the epoch ``duration`` column is numeric or ``timedelta64`` (compared via total seconds).
+        ``total_change_threshold`` is accepted as an alias for ``total_accel_threshold`` (call-site compatibility).
 
         Usage:
             from phopymnehelper.motion_data import MotionData
@@ -75,6 +76,9 @@ class MotionData:
 
         """
         from phopymnehelper.MNE_helpers import MNEHelpers
+
+        if "total_change_threshold" in set_annotations_kwargs:
+            total_accel_threshold = float(set_annotations_kwargs.pop("total_change_threshold"))
 
         if not isinstance(a_ds, pd.DataFrame):
             meas_date = deepcopy(a_ds.info['meas_date'])
@@ -98,11 +102,11 @@ class MotionData:
         is_moving_annots_df: pd.DataFrame = MNEHelpers.convert_df_with_boolean_col_to_epochs(deepcopy(a_motion_df), is_bad_col_name="is_moving", annotation_description_name="BAD_motion", time_col_names=time_col_names)
         if (minimum_bad_duration is not None) and (minimum_bad_duration > 0.0):
             _dur = is_moving_annots_df['duration']
-            _dur_cmp = _dur.dt.total_seconds() if pd.api.types.is_timedelta64_dtype(_dur.dtype) else _dur
+            _dur_cmp = _dur.dt.total_seconds() if pd.api.types.is_timedelta64_dtype(_dur.dtype) else pd.to_numeric(_dur, errors='coerce')
             is_moving_annots_df = is_moving_annots_df[_dur_cmp >= minimum_bad_duration].reset_index(drop=True)
 
         _dur_out = is_moving_annots_df['duration']
-        _duration_np = _dur_out.dt.total_seconds().to_numpy(dtype=float) if pd.api.types.is_timedelta64_dtype(_dur_out.dtype) else _dur_out.to_numpy()
+        _duration_np = _dur_out.dt.total_seconds().to_numpy(dtype=float) if pd.api.types.is_timedelta64_dtype(_dur_out.dtype) else pd.to_numeric(_dur_out, errors='coerce').to_numpy(dtype=float)
         is_moving_annots: mne.Annotations = mne.Annotations(onset=is_moving_annots_df['onset'].to_numpy(), duration=_duration_np, description=is_moving_annots_df['description'].to_numpy(), orig_time=meas_date)
 
 
@@ -530,6 +534,17 @@ class BadMotionDataFrame(CommonDataFrameAccessorMixin):
             return float(datetime_to_unix_timestamp(x))
         return float(x)
 
+
+    @classmethod
+    def _duration_to_seconds(cls, x: Any) -> float:
+        """Coerce Timedelta or numeric duration to float seconds."""
+        if isinstance(x, (pd.Timedelta,)):
+            return float(x.total_seconds())
+        if hasattr(x, "total_seconds") and not isinstance(x, (float, int, np.floating, np.integer)):
+            return float(x.total_seconds())
+        return float(x)
+
+
     @classmethod
     def _detail_t_column_to_unix_numpy(cls, t_col: pd.Series) -> np.ndarray:
         if pd.api.types.is_datetime64_any_dtype(t_col):
@@ -541,11 +556,14 @@ class BadMotionDataFrame(CommonDataFrameAccessorMixin):
     def motion_bad_intervals_key_suffix(cls, bad_unix_df: pd.DataFrame) -> str:
         if bad_unix_df is None or len(bad_unix_df) == 0:
             return ''
+        has_unix = np.all([v in bad_unix_df.columns for v in cls.timestamp_dt_column_names])
         is_timestamp_format: bool = np.all([v in bad_unix_df.columns for v in cls.timestamp_rel_column_names])
-        if is_timestamp_format:
-            rows = sorted((round(cls._motion_bad_cell_to_unix_seconds(r.onset), 6), round(float(r.duration.total_seconds()), 6)) for r in bad_unix_df.itertuples(index=False))
+        if has_unix:
+            rows = sorted((round(float(r.t_start), 6), round(cls._duration_to_seconds(r.t_duration), 6)) for r in bad_unix_df.itertuples(index=False))
+        elif is_timestamp_format:
+            rows = sorted((round(cls._motion_bad_cell_to_unix_seconds(r.onset), 6), round(cls._duration_to_seconds(r.duration), 6)) for r in bad_unix_df.itertuples(index=False))
         else:
-            rows = sorted((round(float(r.t_start), 6), round(float(r.t_duration), 6)) for r in bad_unix_df.itertuples(index=False))
+            raise ValueError("bad_unix_df must have columns ('t_start', 't_duration') or ('onset', 'duration').")
         return hashlib.md5(repr(rows).encode('utf-8')).hexdigest()[:12]
 
 
@@ -555,23 +573,27 @@ class BadMotionDataFrame(CommonDataFrameAccessorMixin):
 
         Accepts either timeline-style columns ``t_start``/``t_duration`` (Unix seconds or datetimes), or MNE-style
         ``onset``/``duration`` (seconds relative to recording start) plus ``time_origin_unix`` (recording start, Unix s).
+        When both column pairs are present (e.g. after ``adding_unix_float_columns``), prefers the unix float columns.
         """
         if bad_df is None or len(bad_df) == 0:
             return pd.DataFrame(columns=cls.timestamp_dt_column_names)
         df = bad_df.copy()
-        
-        if 'onset' in df.columns and 'duration' in df.columns:
-            # if time_origin_unix is None:
-            #     raise ValueError("bad_intervals_df uses MNE columns 'onset' and 'duration'; pass bad_intervals_time_origin_unix (recording start as Unix seconds).")
-            # return pd.DataFrame({'t_start': time_origin_unix + df['onset'].astype(float), 't_duration': df['duration'].astype(float)}).reset_index(drop=True)
-            return df
+        has_unix = ('t_start' in df.columns) and ('t_duration' in df.columns)
+        has_mne = ('onset' in df.columns) and ('duration' in df.columns)
 
-        elif 't_start' in df.columns and 't_duration' in df.columns:
+        if has_unix:
             t_st = df['t_start'].map(cls._motion_bad_cell_to_unix_seconds)
-            t_du = df['t_duration'].astype(float)
+            t_du = df['t_duration'].map(cls._duration_to_seconds)
             return pd.DataFrame({'t_start': t_st, 't_duration': t_du}).reset_index(drop=True)
-        else:
-            raise ValueError("bad_intervals_df must have columns ('t_start', 't_duration') or ('onset', 'duration').")
+
+        if has_mne:
+            t_st = df['onset'].map(cls._motion_bad_cell_to_unix_seconds)
+            if time_origin_unix is not None:
+                t_st = t_st + float(time_origin_unix)
+            t_du = df['duration'].map(cls._duration_to_seconds)
+            return pd.DataFrame({'t_start': t_st, 't_duration': t_du}).reset_index(drop=True)
+
+        raise ValueError("bad_intervals_df must have columns ('t_start', 't_duration') or ('onset', 'duration').")
 
 
     def adding_unix_float_columns(self, inplace: bool=True) -> pd.DataFrame:
@@ -585,7 +607,10 @@ class BadMotionDataFrame(CommonDataFrameAccessorMixin):
         if inplace:
             # self._obj['t_start'] = self._obj['onset'].map(cls._motion_bad_cell_to_unix_seconds)
             self._obj['t_start'] = self._detail_t_column_to_unix_numpy(self._obj['onset']) #.map(cls._motion_bad_cell_to_unix_seconds)
-            self._obj['t_duration'] = self._obj['duration'].dt.total_seconds()
+            if pd.api.types.is_timedelta64_dtype(self._obj['duration'].dtype):
+                self._obj['t_duration'] = self._obj['duration'].dt.total_seconds()
+            else:
+                self._obj['t_duration'] = pd.to_numeric(self._obj['duration'], errors='coerce')
             ## add the optional end/stop columns:
             self._obj['onset_end'] = self._obj['onset'] + self._obj['duration']
             self._obj['t_stop'] = self._obj['t_start'] + self._obj['t_duration']
@@ -593,7 +618,10 @@ class BadMotionDataFrame(CommonDataFrameAccessorMixin):
         else:
             df: pd.DataFrame = self._obj.copy()
             df['t_start'] = self._detail_t_column_to_unix_numpy(df['onset']) #.map(cls._motion_bad_cell_to_unix_seconds)
-            df['t_duration'] = df['duration'].dt.total_seconds()
+            if pd.api.types.is_timedelta64_dtype(df['duration'].dtype):
+                df['t_duration'] = df['duration'].dt.total_seconds()
+            else:
+                df['t_duration'] = pd.to_numeric(df['duration'], errors='coerce')
             ## add the optional end/stop columns:
             df['onset_end'] = df['onset'] + df['duration']
             df['t_stop'] = df['t_start'] + df['t_duration']
