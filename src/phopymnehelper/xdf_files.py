@@ -373,6 +373,11 @@ class LabRecorderXDF:
 
 
     @classmethod
+    def _is_iograph_stream(cls, stream_type: str, stream_name: str) -> bool:
+        return stream_type.upper() == 'POSITION' and stream_name == 'IOGraph_Mouse'
+
+
+    @classmethod
     def _get_channel_names_for_stream(cls, stream_type: str, stream_name: str, n_columns: int) -> List[str]:
         if cls._is_motion_stream(stream_type, stream_name):
             return modality_channels_dict['MOTION']
@@ -380,6 +385,8 @@ class LabRecorderXDF:
             return modality_channels_dict['EEG']
         if cls._is_log_stream(stream_type, stream_name):
             return modality_channels_dict['LOG']
+        if cls._is_iograph_stream(stream_type, stream_name):
+            return ['x', 'y']
         return [f'Channel_{i}' for i in range(n_columns)]
 
 
