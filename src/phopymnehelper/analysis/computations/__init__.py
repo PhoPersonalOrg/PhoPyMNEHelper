@@ -14,6 +14,7 @@ from phopymnehelper.analysis.computations.specific.amph_peri_event_spectrogram i
 from phopymnehelper.analysis.computations.specific.bad_epochs import BAD_EPOCH_INTERVALS_TRACK_DEFAULT_NAME, BAD_EPOCHS_QC_PARAM_KEYS, BadEpochsQCComputation
 from phopymnehelper.analysis.computations.specific.base import SpecificComputationBase
 from phopymnehelper.analysis.computations.specific.EEG_Spectograms import EEG_SPECTROGRAM_PARAM_KEYS, EEGSpectrogramComputation
+from phopymnehelper.analysis.computations.specific.eeg_manifold_computation import EEG_MANIFOLD_PARAM_KEYS, EEGManifoldComputation
 from phopymnehelper.analysis.computations.specific.fatigue_analysis import FatigueAnalysis
 from phopymnehelper.analysis.computations.specific.frontal_midline_theta import FRONTAL_MIDLINE_THETA_PARAM_KEYS, FrontalMidlineThetaComputation
 from phopymnehelper.analysis.computations.specific.jaw_clench_probability import JAW_CLENCH_PROB_COLUMN, JawClenchProbabilityComputation
@@ -35,8 +36,10 @@ __all__ = [
     "DEFAULT_REGISTRY",
     "DiskComputationCache",
     "EEGComputationRegistryHelper",
+    "EEGManifoldComputation",
     "EEGManifoldConfig",
     "EEG_COMPUTATION_IDS_ORDERED",
+    "EEG_MANIFOLD_PARAM_KEYS",
     "EEG_SPECTROGRAM_PARAM_KEYS",
     "EEGSpectrogramComputation",
     "FRAME_MENTAL_STATE_BANDS",

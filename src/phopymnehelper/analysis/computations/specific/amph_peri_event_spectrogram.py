@@ -116,25 +116,15 @@ class AmphPeriEventSpectrogramComputation(SpecificComputationBase):
         if spec is None:
             raise ValueError("amph_peri_event_spectrogram: upstream 'spectogram' output is None")
 
-        Sxx = spec["Sxx"]
-        if hasattr(Sxx, "values"):
-            Sxx = Sxx.values
-        Sxx = np.asarray(Sxx, dtype=np.float32)
-        freqs = np.asarray(spec["freqs"], dtype=np.float64)
-        ch_names: List[str] = list(spec["ch_names"])
-
-        # t_unix: full-session spectrogram time axis in unix seconds
-        if "t_unix" in spec and spec["t_unix"] is not None:
-            t_unix = np.asarray(spec["t_unix"], dtype=np.float64)
-        else:
-            t_rel_spec = np.asarray(spec["t"], dtype=np.float64)
-            session_t_start = ctx.extras.get("session_t_start_unix")
-            if session_t_start is None:
-                raise ValueError("amph_peri_event_spectrogram: spectogram has no t_unix and ctx.extras['session_t_start_unix'] is missing")
-            t_unix = float(session_t_start) + t_rel_spec
-
+        # -- params ----------------------------------------------------------
+        kw = self.filter_params(params)
+        pre_s: float = float(kw.get("pre_s", DEFAULT_PERI_PRE_S))
+        post_s: float = float(kw.get("post_s", DEFAULT_PERI_POST_S))
+        bands = kw.get("bands", DEFAULT_BANDS)
 
         # -- extract dose event times from ctx.extras or auto-resolve -------
+        # Resolve events before requiring absolute spectrogram time so sessions
+        # with no AMPH doses can return empty without session_t_start_unix.
         amph_dose_t_unix = ctx.extras.get("amph_dose_t_unix")
         if amph_dose_t_unix is None:
             if "amph_events" in ctx.extras:
@@ -162,12 +152,43 @@ class AmphPeriEventSpectrogramComputation(SpecificComputationBase):
         if amph_dose_t_unix.size > 0:
             amph_dose_t_unix = np.unique(amph_dose_t_unix)  # drop duplicate doses
 
+        freqs = np.asarray(spec["freqs"], dtype=np.float64)
+        ch_names: List[str] = list(spec["ch_names"])
+        if amph_dose_t_unix.size == 0:
+            return dict(
+                peri_slices=[],
+                Sxx_pre_mean=np.array([]),
+                Sxx_post_mean=np.array([]),
+                n_events=0,
+                freqs=freqs,
+                ch_names=ch_names,
+                t_rel=np.asarray([], dtype=np.float64),
+                pre_s=pre_s,
+                post_s=post_s,
+                computation_version=self.version,
+            )
 
-        # -- params ----------------------------------------------------------
-        kw = self.filter_params(params)
-        pre_s: float = float(kw.get("pre_s", DEFAULT_PERI_PRE_S))
-        post_s: float = float(kw.get("post_s", DEFAULT_PERI_POST_S))
-        bands = kw.get("bands", DEFAULT_BANDS)
+        Sxx = spec["Sxx"]
+        if hasattr(Sxx, "values"):
+            Sxx = Sxx.values
+        Sxx = np.asarray(Sxx, dtype=np.float32)
+
+        # t_unix: full-session spectrogram time axis in unix seconds
+        if "t_unix" in spec and spec["t_unix"] is not None:
+            t_unix = np.asarray(spec["t_unix"], dtype=np.float64)
+        else:
+            t_rel_spec = np.asarray(spec["t"], dtype=np.float64)
+            session_t_start = ctx.extras.get("session_t_start_unix")
+            if session_t_start is None and ctx.raw is not None:
+                meas_date = ctx.raw.info.get("meas_date")
+                if meas_date is not None:
+                    if getattr(meas_date, "tzinfo", None) is None:
+                        from datetime import timezone as _tz
+                        meas_date = meas_date.replace(tzinfo=_tz.utc)
+                    session_t_start = float(meas_date.timestamp())
+            if session_t_start is None:
+                raise ValueError("amph_peri_event_spectrogram: spectogram has no t_unix and ctx.extras['session_t_start_unix'] is missing")
+            t_unix = float(session_t_start) + t_rel_spec
 
         # -- filter dose events to those inside spectrogram span ------------
         if t_unix.size > 0:

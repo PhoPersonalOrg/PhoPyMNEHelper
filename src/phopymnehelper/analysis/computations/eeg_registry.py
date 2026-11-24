@@ -11,6 +11,7 @@ from phopymnehelper.analysis.computations.specific.ADHD_sleep_intrusions import 
 from phopymnehelper.analysis.computations.specific.amph_peri_event_spectrogram import AmphPeriEventSpectrogramComputation
 from phopymnehelper.analysis.computations.specific.bad_epochs import BadEpochsQCComputation
 from phopymnehelper.analysis.computations.specific.EEG_Spectograms import EEGSpectrogramComputation
+from phopymnehelper.analysis.computations.specific.eeg_manifold_computation import EEGManifoldComputation
 from phopymnehelper.analysis.computations.specific.frontal_midline_theta import FrontalMidlineThetaComputation
 from phopymnehelper.analysis.computations.specific.jaw_clench_probability import JawClenchProbabilityComputation
 from phopymnehelper.analysis.computations.specific.mental_states import FrameMentalStatesComputation
@@ -18,7 +19,7 @@ from phopymnehelper.analysis.computations.specific.mental_states import FrameMen
 # xdf_file_name: TypeAlias = str # a name of the xdf file corresponding to a given session
 # EEGComputationId: TypeAlias = Literal["time_independent_bad_channels", "bad_epochs", "raw_data_topo", "cwt", "spectogram"]
 
-EEG_COMPUTATION_IDS_ORDERED: Tuple[types.EEGComputationId, ...] = ("time_independent_bad_channels", "bad_epochs", "raw_data_topo", "cwt", "spectogram", "amph_peri_event_spectrogram")
+EEG_COMPUTATION_IDS_ORDERED: Tuple[types.EEGComputationId, ...] = ("time_independent_bad_channels", "bad_epochs", "raw_data_topo", "cwt", "spectogram", "amph_peri_event_spectrogram", "eeg_manifold")
 
 
 _EEG_NODES_REGISTERED = False
@@ -73,6 +74,7 @@ class EEGComputationRegistryHelper:
         cls._register_node_if_absent(registry, JawClenchProbabilityComputation().to_computation_node())
         cls._register_node_if_absent(registry, FrameMentalStatesComputation().to_computation_node())
         cls._register_node_if_absent(registry, AmphPeriEventSpectrogramComputation().to_computation_node())
+        cls._register_node_if_absent(registry, EEGManifoldComputation().to_computation_node())
 
 
     @classmethod
@@ -100,7 +102,7 @@ class EEGComputationRegistryHelper:
         if reg is None:
             reg = cls.ensure_default_eeg_registry()
         else:
-            if not reg.has("spectogram") or not reg.has("bad_epochs") or not reg.has("theta_delta_sleep_intrusion") or (not reg.has("frontal_midline_theta")) or (not reg.has("jaw_clench_probability")) or (not reg.has("mental_states")) or (not reg.has("amph_peri_event_spectrogram")):
+            if not reg.has("spectogram") or not reg.has("bad_epochs") or not reg.has("theta_delta_sleep_intrusion") or (not reg.has("frontal_midline_theta")) or (not reg.has("jaw_clench_probability")) or (not reg.has("mental_states")) or (not reg.has("amph_peri_event_spectrogram")) or (not reg.has("eeg_manifold")):
                 cls.register_eeg_computation_nodes(reg)
         g = tuple(goals) if goals is not None else EEG_COMPUTATION_IDS_ORDERED
         ctx = RunContext(session=session, raw=raw, extras=dict(extras or {}))
