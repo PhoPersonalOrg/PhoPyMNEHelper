@@ -1618,7 +1618,7 @@ requires-dist = [
     { name = "numba", marker = "extra == 'full-no-qt'" },
     { name = "numba", marker = "extra == 'full-pyqt6'" },
     { name = "numba", marker = "extra == 'full-pyside6'" },
-    { name = "numpy", specifier = ">=1.26,<3" },
+    { name = "numpy", specifier = ">=1.20" },
     { name = "openmeeg", marker = "extra == 'full'", specifier = ">=2.5.7" },
     { name = "openmeeg", marker = "extra == 'full-no-qt'", specifier = ">=2.5.7" },
     { name = "openmeeg", marker = "extra == 'full-pyqt6'", specifier = ">=2.5.7" },
