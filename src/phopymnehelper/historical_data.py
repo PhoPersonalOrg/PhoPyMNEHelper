@@ -40,11 +40,12 @@ class HistoricalData:
     
     """
     modality_channels_dict = {'EEG': ['AF3', 'F7', 'F3', 'FC5', 'T7', 'P7', 'O1', 'O2', 'P8', 'T8', 'FC6', 'F4', 'F8', 'AF4'],
-                            'MOTION': ['AccX', 'AccY', 'AccZ', 'GyroX', 'GyroY', 'GyroZ'],
+                            'MOTION': ['Q0', 'Q1', 'Q2', 'Q3', 'AccX', 'AccY', 'AccZ', 'MagX', 'MagY', 'MagZ'],
+                            'MOTION_LEGACY_GYRO': ['AccX', 'AccY', 'AccZ', 'GyroX', 'GyroY', 'GyroZ'],
                             'GENERIC': ['AF3', 'F7', 'F3', 'FC5', 'T7', 'P7', 'O1', 'O2', 'P8', 'T8', 'FC6', 'F4', 'F8', 'AF4'],
     }
     
-    modality_sfreq_dict = {'EEG': 128, 'MOTION': 16,
+    modality_sfreq_dict = {'EEG': 128, 'MOTION': 32,
                            'GENERIC': 128, 
     }
 

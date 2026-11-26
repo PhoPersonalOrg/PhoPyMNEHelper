@@ -23,13 +23,19 @@ from phopymnehelper.helpers.dataframe_accessor_helpers import CommonDataFrameAcc
 logger = logging.getLogger(__name__)
 
 
+# Official Emotiv EPOC X Motion (Android / Cortex): quaternion + accel + mag (no gyro).
+MOTION_CHANNELS_EPOCX = ['Q0', 'Q1', 'Q2', 'Q3', 'AccX', 'AccY', 'AccZ', 'MagX', 'MagY', 'MagZ']
+# Legacy CyKit-style Acc+Gyro recordings still seen in older XDFs.
+MOTION_CHANNELS_LEGACY_GYRO = ['AccX', 'AccY', 'AccZ', 'GyroX', 'GyroY', 'GyroZ']
+
 modality_channels_dict = {'EEG': ['AF3', 'F7', 'F3', 'FC5', 'T7', 'P7', 'O1', 'O2', 'P8', 'T8', 'FC6', 'F4', 'F8', 'AF4'],
-                        'MOTION': ['AccX', 'AccY', 'AccZ', 'GyroX', 'GyroY', 'GyroZ'],
+                        'MOTION': list(MOTION_CHANNELS_EPOCX),
+                        'MOTION_LEGACY_GYRO': list(MOTION_CHANNELS_LEGACY_GYRO),
                         'GENERIC': ['AF3', 'F7', 'F3', 'FC5', 'T7', 'P7', 'O1', 'O2', 'P8', 'T8', 'FC6', 'F4', 'F8', 'AF4'],
                         'LOG': ['msg'],
 }
 
-modality_sfreq_dict = {'EEG': 128, 'MOTION': 16,
+modality_sfreq_dict = {'EEG': 128, 'MOTION': 32,  # Cortex MEMS rates are 0/32/64/128; 32 is the common default
                         'GENERIC': 128, 'LOG': -1,
 }
 
@@ -354,7 +360,12 @@ class LabRecorderXDF:
 
     @classmethod
     def _is_motion_stream(cls, stream_type: str, stream_name: str) -> bool:
-        return (stream_type.upper() in ['SIGNAL', 'RAW']) and ('Motion' in stream_name)
+        """True for Emotiv Motion LSL/XDF streams (Signal/Raw or Flutter Accelerometer type)."""
+        t = (stream_type or '').upper()
+        name = stream_name or ''
+        if 'Motion' not in name:
+            return False
+        return t in ('SIGNAL', 'RAW', 'ACCELEROMETER', 'MOTION')
 
 
     @classmethod
@@ -378,11 +389,33 @@ class LabRecorderXDF:
 
 
     @classmethod
+    def _motion_channel_names_for_count(cls, n_columns: int) -> List[str]:
+        """Pick Motion labels from sample width: 10-ch Q/Acc/Mag (official) or 6-ch Acc/Gyro (legacy)."""
+        if n_columns >= 10:
+            return list(MOTION_CHANNELS_EPOCX)
+        if n_columns == 6:
+            return list(MOTION_CHANNELS_LEGACY_GYRO)
+        if n_columns == 3:
+            return ['AccX', 'AccY', 'AccZ']
+        if n_columns > 0:
+            base = list(MOTION_CHANNELS_EPOCX)
+            if n_columns <= len(base):
+                return base[:n_columns]
+            return base + [f'Channel_{i}' for i in range(len(base), n_columns)]
+        return list(MOTION_CHANNELS_EPOCX)
+
+
+    @classmethod
     def _get_channel_names_for_stream(cls, stream_type: str, stream_name: str, n_columns: int) -> List[str]:
         if cls._is_motion_stream(stream_type, stream_name):
-            return modality_channels_dict['MOTION']
+            return cls._motion_channel_names_for_count(int(n_columns))
         if cls._is_eeg_quality_stream(stream_type, stream_name) or cls._is_eeg_stream(stream_type, stream_name):
-            return modality_channels_dict['EEG']
+            names = list(modality_channels_dict['EEG'])
+            if n_columns > 0 and n_columns != len(names):
+                if n_columns < len(names):
+                    return names[:n_columns]
+                return names + [f'Channel_{i}' for i in range(len(names), n_columns)]
+            return names
         if cls._is_log_stream(stream_type, stream_name):
             return modality_channels_dict['LOG']
         if cls._is_iograph_stream(stream_type, stream_name):
