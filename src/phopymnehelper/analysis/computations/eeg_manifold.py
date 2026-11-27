@@ -138,8 +138,11 @@ def apply_quality_and_session_gates(eeg_df: pd.DataFrame, quality_df: Optional[p
                 xf, yf = x_all[finite], col_y[finite]
                 if len(xf) == 1:
                     q_interp = np.full(len(target_t), float(yf[0]), dtype=float)
+                    if cfg.mask_unknown_quality:
+                        q_interp[target_t < xf[0]] = np.nan
                 else:
-                    f_interp = interp1d(xf, yf, kind="linear", fill_value="extrapolate", assume_sorted=True)
+                    lead_fill = np.nan if cfg.mask_unknown_quality else float(yf[0])
+                    f_interp = interp1d(xf, yf, kind="previous", bounds_error=False, fill_value=(lead_fill, float(yf[-1])), assume_sorted=True)
                     q_interp = np.asarray(f_interp(target_t), dtype=float)
                 is_valid = q_interp >= float(cfg.min_quality_to_keep)
                 if cfg.mask_unknown_quality:

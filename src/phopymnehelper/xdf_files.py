@@ -272,7 +272,7 @@ class LabRecorderXDF:
 
 
     """
-    lab_recorder_to_mne_to_type_dict = {'EEG':'eeg', 'ACC':'eeg', 'GYRO':'eeg', 'RAW': 'eeg'} # 'RAW' for eeg quality
+    lab_recorder_to_mne_to_type_dict = {'EEG': 'eeg', 'ACC': 'eeg', 'GYRO': 'eeg', 'QUAT': 'misc', 'MAG': 'misc', 'CQ': 'misc', 'RAW': 'eeg'} # 'RAW' / 'CQ' for eeg quality
     stream_name_to_modality_dict = {'Epoc X': DataModalityType.EEG, 'Epoc X Motion':DataModalityType.MOTION, 'Epoc X eQuality': None, 'TextLogger': DataModalityType.PHO_LOG_TO_LSL, 'EventBoard': DataModalityType.PHO_LOG_TO_LSL, 'WhisperLiveLogger': DataModalityType.PHO_LOG_TO_LSL}
 
 
@@ -360,17 +360,24 @@ class LabRecorderXDF:
 
     @classmethod
     def _is_motion_stream(cls, stream_type: str, stream_name: str) -> bool:
-        """True for Emotiv Motion LSL/XDF streams (Signal/Raw or Flutter Accelerometer type)."""
+        """True for Emotiv Motion LSL/XDF streams (Signal/Raw/Motion or Flutter Accelerometer type)."""
         t = (stream_type or '').upper()
         name = stream_name or ''
-        if 'Motion' not in name:
+        if t in ('MOTION', 'IMU'):
+            return True
+        if 'motion' not in name.lower():
             return False
-        return t in ('SIGNAL', 'RAW', 'ACCELEROMETER', 'MOTION')
+        return t in ('SIGNAL', 'RAW', 'ACCELEROMETER', 'MOTION', 'QUAT', 'ACC', 'MAG')
 
 
     @classmethod
     def _is_eeg_quality_stream(cls, stream_type: str, stream_name: str) -> bool:
-        return (stream_type.upper() in ['RAW']) and (' eQuality' in stream_name)
+        """True for Emotiv eQuality / CQ LSL/XDF streams (`type='CQ'` in modern emotiv-lsl, `type='Raw'` in legacy)."""
+        t = (stream_type or '').upper()
+        name = stream_name or ''
+        if t in ('CQ', 'QUALITY', 'EEG_QUALITY'):
+            return True
+        return (t in ('RAW', 'SIGNAL')) and ('equality' in name.lower())
 
 
     @classmethod
@@ -421,6 +428,44 @@ class LabRecorderXDF:
         if cls._is_iograph_stream(stream_type, stream_name):
             return ['x', 'y']
         return [f'Channel_{i}' for i in range(n_columns)]
+
+
+    @classmethod
+    def extract_channel_labels_from_stream_info(cls, stream_info: Dict, stream_type: str, stream_name: str, n_columns: int) -> List[str]:
+        """Extract LSL channel `<label>` names from `stream_info['desc']` when valid, else fallback."""
+        fallback = cls._get_channel_names_for_stream(stream_type, stream_name, n_columns)
+        if not isinstance(stream_info, dict) or n_columns <= 0:
+            return fallback
+        try:
+            desc_list = stream_info.get('desc') or []
+            desc0 = desc_list[0] if len(desc_list) > 0 and isinstance(desc_list[0], dict) else {}
+            ch_blocks = desc0.get('channels') or []
+            ch0 = ch_blocks[0] if len(ch_blocks) > 0 and isinstance(ch_blocks[0], dict) else {}
+            raw_channels = ch0.get('channel') or []
+            labels: List[str] = []
+            for ch_entry in raw_channels:
+                if not isinstance(ch_entry, dict):
+                    continue
+                lab = unwrap_single_element_listlike_if_needed(ch_entry.get('label'))
+                if lab is not None and str(lab).strip():
+                    labels.append(str(lab).strip())
+            ## END for ch_entry in raw_channels...
+
+            if len(labels) != int(n_columns):
+                return fallback
+            eeg_set = set(modality_channels_dict['EEG'])
+            if cls._is_eeg_quality_stream(stream_type, stream_name):
+                stripped = [lab[1:] if lab.startswith('q') and lab[1:] in eeg_set else lab for lab in labels]
+                return stripped if all(lab in eeg_set for lab in stripped) else fallback
+            if cls._is_motion_stream(stream_type, stream_name):
+                known_motion = {m.lower(): m for m in [*MOTION_CHANNELS_EPOCX, *MOTION_CHANNELS_LEGACY_GYRO]}
+                mapped = [known_motion.get(lab.lower()) for lab in labels]
+                return [m for m in mapped if m is not None] if all(m is not None for m in mapped) else fallback
+            if cls._is_eeg_stream(stream_type, stream_name):
+                return labels if all(lab in eeg_set for lab in labels) else fallback
+            return labels
+        except Exception:
+            return fallback
 
 
     # --------------------------------------------------------------------- #
@@ -954,7 +999,8 @@ class LabRecorderXDF:
                         # ch_names = [f"{name}_{i}" for i in range(data.shape[0])]
                         # ch_types = ["eeg"] * data.shape[0]  # adjust depending on stream type
                         ch_names = channels_df['label'].to_list()
-                        ch_types = [self.lab_recorder_to_mne_to_type_dict[v] for v in channels_df['type']]
+                        raw_types = channels_df['type'].to_list() if 'type' in channels_df.columns else ['RAW'] * len(ch_names)
+                        ch_types = [self.lab_recorder_to_mne_to_type_dict.get(str(v).upper(), 'misc') for v in raw_types]
                         
                         info = mne.create_info(ch_names=ch_names, sfreq=fs, ch_types=ch_types)
                         info = info.set_meas_date(self.file_datetime)
@@ -1645,7 +1691,7 @@ class LabRecorderXDF:
             elif not ((n_channels == n_columns) and (len(timestamps) == n_t_stamps)):
                 return None
 
-            time_series_df = pd.DataFrame(time_series, columns=cls._get_channel_names_for_stream(stream_type, stream_name, n_columns))
+            time_series_df = pd.DataFrame(time_series, columns=cls.extract_channel_labels_from_stream_info(stream_info, stream_type, stream_name, n_columns))
             time_series_df['t'] = timestamps
             return time_series_df
 
