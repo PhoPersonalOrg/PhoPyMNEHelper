@@ -671,7 +671,8 @@ class LabRecorderXDF:
         Which generally really slow things down.
         """
         # debug_print = kwargs.pop('debug_print', False)
-        streams, header = pyxdf.load_xdf(a_xdf_file, synchronize_clocks=True, handle_clock_resets=True, dejitter_timestamps=False, verbose=debug_print) ## disabled sync since it wasn't working anyway
+        from phopymnehelper.xdf_load import load_xdf_resilient
+        streams, header = load_xdf_resilient(a_xdf_file, synchronize_clocks=True, handle_clock_resets=True, dejitter_timestamps=False, verbose=bool(debug_print))
         return cls._init_basic_from_pyxdf_payload(a_xdf_file=a_xdf_file, streams=streams, header=header, skipped_stream_names=skipped_stream_names, **kwargs)
 
 
@@ -762,14 +763,18 @@ class LabRecorderXDF:
                     zeroed_stream_clock_times = stream_clock_times.copy()
 
                     if len(zeroed_stream_timestamps) > 0:
-                        assert stream_info_dict.get('stream_start_lsl_local_offset_seconds', None) is not None
-                        zeroed_stream_timestamps = zeroed_stream_timestamps - stream_info_dict['stream_start_lsl_local_offset_seconds']
+                        _lsl_offset = stream_info_dict.get('stream_start_lsl_local_offset_seconds', None)
+                        if _lsl_offset is None:
+                            raise ValueError(f'stream "{name}" missing stream_start_lsl_local_offset_seconds; cannot zero timestamps')
+                        zeroed_stream_timestamps = zeroed_stream_timestamps - _lsl_offset
                     if len(zeroed_stream_clock_times) > 0:
                         zeroed_stream_clock_times = zeroed_stream_clock_times - zeroed_stream_clock_times[0]
 
                     zeroed_stream_timestamps_dt = pd.to_timedelta(zeroed_stream_timestamps, unit='s')
-                    assert stream_info_dict.get('stream_start_datetime', None) is not None
-                    start_ts = pd.Timestamp(stream_info_dict.get('stream_start_datetime', self.file_datetime))
+                    _stream_start_dt = stream_info_dict.get('stream_start_datetime', None) or getattr(self, 'file_datetime', None)
+                    if _stream_start_dt is None:
+                        raise ValueError(f'stream "{name}" missing stream_start_datetime and LabRecorderXDF.file_datetime; cannot build timestamps')
+                    start_ts = pd.Timestamp(_stream_start_dt)
                     stream_datetimes = start_ts + zeroed_stream_timestamps_dt
 
                     if logger.isEnabledFor(logging.DEBUG):
@@ -917,9 +922,13 @@ class LabRecorderXDF:
                     zeroed_stream_timestamps = stream_timestamps - stream_info_dict['stream_start_lsl_local_offset_seconds'] if (len(stream_timestamps) > 0 and stream_info_dict.get('stream_start_lsl_local_offset_seconds', None) is not None) else stream_timestamps.copy()
 
                     if build_timestamp_dfs or (fs == 0):
-                        assert stream_info_dict.get('stream_start_datetime', None) is not None
+                        _stream_start_dt = stream_info_dict.get('stream_start_datetime', None)
+                        if _stream_start_dt is None:
+                            _stream_start_dt = getattr(self, 'file_datetime', None)
+                        if _stream_start_dt is None:
+                            raise ValueError(f'stream "{name}" missing stream_start_datetime and LabRecorderXDF.file_datetime; cannot build timestamps')
                         zeroed_stream_timestamps_dt = pd.to_timedelta(zeroed_stream_timestamps, unit='s')
-                        start_ts = pd.Timestamp(stream_info_dict.get('stream_start_datetime', self.file_datetime))
+                        start_ts = pd.Timestamp(_stream_start_dt)
                         stream_datetimes = start_ts + zeroed_stream_timestamps_dt
                         if build_timestamp_dfs:
                             streams_timestamp_dfs[name] = pd.DataFrame(dict(
@@ -984,7 +993,8 @@ class LabRecorderXDF:
 
             except Exception as e:
                 _failed_stream_name = name or (stream.get('info', {}).get('name') or ['<unknown>'])[0]
-                logger.error('stream "%s" failed with error: %s. Continuing with the remainder of xdf_streams...', _failed_stream_name, e)
+                _err_msg = str(e).strip() or repr(e)
+                logger.error('stream "%s" failed with error: %s. Continuing with the remainder of xdf_streams...', _failed_stream_name, _err_msg, exc_info=True)
                 continue
 
             # raise e
