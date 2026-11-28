@@ -675,7 +675,7 @@ class LabRecorderXDF:
         return cls._init_basic_from_pyxdf_payload(a_xdf_file=a_xdf_file, streams=streams, header=header, skipped_stream_names=skipped_stream_names, **kwargs)
 
 
-    def perform_process_xdf_streams(self, debug_print: bool=True):
+    def perform_process_xdf_streams(self, debug_print: bool = True, build_timestamp_dfs: bool = True):
         """ processes the loaded streams without loading the entire data from file.
 
         Per-stream detail is emitted at logging DEBUG for this module (`phopymnehelper.xdf_files`);
@@ -753,40 +753,35 @@ class LabRecorderXDF:
                 stream_timestamps = np.asarray(stream.get('time_stamps', []), dtype=float).copy()
                 stream_clock_times = np.asarray(stream.get('clock_times', []), dtype=float).copy()
 
-                logger.debug('\tstream_timestamps: %s', stream_timestamps.tolist())
-                logger.debug('\tstream_clock_times: %s', stream_clock_times.tolist())
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug('\tstream_timestamps: %s', stream_timestamps.tolist())
+                    logger.debug('\tstream_clock_times: %s', stream_clock_times.tolist())
 
-                zeroed_stream_timestamps = deepcopy(stream_timestamps)
-                zeroed_stream_clock_times = deepcopy(stream_clock_times)
+                if build_timestamp_dfs:
+                    zeroed_stream_timestamps = stream_timestamps.copy()
+                    zeroed_stream_clock_times = stream_clock_times.copy()
 
-                if len(zeroed_stream_timestamps) > 0:
-                    assert stream_info_dict.get('stream_start_lsl_local_offset_seconds', None) is not None
-                    # zeroed_stream_timestamps = zeroed_stream_timestamps - zeroed_stream_timestamps[0] ## subtract out the first timestamp
-                    zeroed_stream_timestamps = zeroed_stream_timestamps - stream_info_dict['stream_start_lsl_local_offset_seconds']
-                if len(zeroed_stream_clock_times) > 0:
-                    zeroed_stream_clock_times = zeroed_stream_clock_times - zeroed_stream_clock_times[0] ## subtract out the first timestamp
-                
-                zeroed_stream_timestamps_dt = np.array([pd.Timedelta(seconds=v) for v in zeroed_stream_timestamps]) ## convert to timedelta (for no reason)
-                # stream_datetimes = np.array([stream_info_dict.get('recording_start_datetime', file_datetime) + pd.Timedelta(seconds=v) for v in zeroed_stream_timestamps]) ## List[datetime]
-                assert stream_info_dict.get('stream_start_datetime', None) is not None
-                stream_datetimes = np.array([stream_info_dict.get('stream_start_datetime', self.file_datetime) + pd.Timedelta(seconds=v) for v in zeroed_stream_timestamps]) ## compatibility
+                    if len(zeroed_stream_timestamps) > 0:
+                        assert stream_info_dict.get('stream_start_lsl_local_offset_seconds', None) is not None
+                        zeroed_stream_timestamps = zeroed_stream_timestamps - stream_info_dict['stream_start_lsl_local_offset_seconds']
+                    if len(zeroed_stream_clock_times) > 0:
+                        zeroed_stream_clock_times = zeroed_stream_clock_times - zeroed_stream_clock_times[0]
 
-                ## OUTPUTS: stream_datetimes
+                    zeroed_stream_timestamps_dt = pd.to_timedelta(zeroed_stream_timestamps, unit='s')
+                    assert stream_info_dict.get('stream_start_datetime', None) is not None
+                    start_ts = pd.Timestamp(stream_info_dict.get('stream_start_datetime', self.file_datetime))
+                    stream_datetimes = start_ts + zeroed_stream_timestamps_dt
 
-                ## post-zeroed:
-                logger.debug('\tpost-zeroed stream_timestamps: %s', stream_timestamps.tolist())
-                logger.debug('\tpost-zeroed stream_clock_times: %s', stream_clock_times.tolist())
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug('\tpost-zeroed stream_timestamps: %s', stream_timestamps.tolist())
+                        logger.debug('\tpost-zeroed stream_clock_times: %s', stream_clock_times.tolist())
 
-                ## STREAM OUTPUTS: stream_timestamps, stream_clock_times, zeroed_stream_timestamps, zeroed_stream_clock_times, zeroed_stream_timestamps_dt, stream_datetimes
-                # a_raw_df: pd.DataFrame = pd.DataFrame(dict(onset=zeroed_stream_timestamps, onset_dt=zeroed_stream_timestamps_dt, duration=([0.0] * len(zeroed_stream_timestamps_dt)), description=logger_strings))
-                # all_annotations.append(a_raw_df)
-
-                ## UPDATE: `streams_timestamp_dfs`
-                streams_timestamp_dfs[name] = pd.DataFrame(dict(stream_timestamps=stream_timestamps,
-                    zeroed_stream_timestamps=zeroed_stream_timestamps, zeroed_stream_timestamps_dt=zeroed_stream_timestamps_dt,
-                    # stream_clock_times=stream_clock_times,  zeroed_stream_clock_times=zeroed_stream_clock_times,
-                    stream_datetimes = stream_datetimes,
-                ))
+                    streams_timestamp_dfs[name] = pd.DataFrame(dict(
+                        stream_timestamps=stream_timestamps,
+                        zeroed_stream_timestamps=zeroed_stream_timestamps,
+                        zeroed_stream_timestamps_dt=zeroed_stream_timestamps_dt,
+                        stream_datetimes=stream_datetimes,
+                    ))
 
                 # ## In lightweight mode, only collect bare stream metadata and skip heavy data processing:
                 # if not should_load_full_file_data:
@@ -829,7 +824,7 @@ class LabRecorderXDF:
         return stream_infos, streams_timestamp_dfs
 
 
-    def perform_load_xdf_streams(self, should_load_full_file_data: bool=True, debug_print: bool=True):
+    def perform_load_xdf_streams(self, should_load_full_file_data: bool = True, debug_print: bool = True, build_timestamp_dfs: bool = True, lazy_non_eeg_raws: bool = False):
         """ processes the loaded streams
         Updates:
             self.datasets, self.datasets_dict
@@ -913,48 +908,26 @@ class LabRecorderXDF:
                     stream_approx_dur_sec: float = (stream_last_timestamp - stream_first_timestamp).total_seconds()
                     logger.debug('\tstream_approx_dur_sec: %s', stream_approx_dur_sec)
 
-                    stream_timestamps = np.asarray(stream.get('time_stamps', []), dtype=float).copy()
-                    stream_clock_times = np.asarray(stream.get('clock_times', []), dtype=float).copy()
+                    stream_timestamps = np.asarray(stream.get('time_stamps', []), dtype=float)
+                    if logger.isEnabledFor(logging.DEBUG):
+                        stream_clock_times = np.asarray(stream.get('clock_times', []), dtype=float)
+                        logger.debug('\tstream_timestamps: %s', stream_timestamps.tolist())
+                        logger.debug('\tstream_clock_times: %s', stream_clock_times.tolist())
 
-                    logger.debug('\tstream_timestamps: %s', stream_timestamps.tolist())
-                    logger.debug('\tstream_clock_times: %s', stream_clock_times.tolist())
+                    zeroed_stream_timestamps = stream_timestamps - stream_info_dict['stream_start_lsl_local_offset_seconds'] if (len(stream_timestamps) > 0 and stream_info_dict.get('stream_start_lsl_local_offset_seconds', None) is not None) else stream_timestamps.copy()
 
-                    zeroed_stream_timestamps = deepcopy(stream_timestamps)
-                    zeroed_stream_clock_times = deepcopy(stream_clock_times)
-
-                    if len(zeroed_stream_timestamps) > 0:
-                        assert stream_info_dict.get('stream_start_lsl_local_offset_seconds', None) is not None
-                        # zeroed_stream_timestamps = zeroed_stream_timestamps - zeroed_stream_timestamps[0] ## subtract out the first timestamp
-                        zeroed_stream_timestamps = zeroed_stream_timestamps - stream_info_dict['stream_start_lsl_local_offset_seconds']
-                    if len(zeroed_stream_clock_times) > 0:
-                        zeroed_stream_clock_times = zeroed_stream_clock_times - zeroed_stream_clock_times[0] ## subtract out the first timestamp
-
-                    zeroed_stream_timestamps_dt = np.array([pd.Timedelta(seconds=v) for v in zeroed_stream_timestamps]) ## convert to timedelta (for no reason)
-                    # stream_datetimes = np.array([stream_info_dict.get('recording_start_datetime', file_datetime) + pd.Timedelta(seconds=v) for v in zeroed_stream_timestamps]) ## List[datetime]
-                    assert stream_info_dict.get('stream_start_datetime', None) is not None
-                    stream_datetimes = np.array([stream_info_dict.get('stream_start_datetime', self.file_datetime) + pd.Timedelta(seconds=v) for v in zeroed_stream_timestamps]) ## compatibility
-
-                    ## OUTPUTS: stream_datetimes
-
-                    ## post-zeroed:
-                    logger.debug('\tpost-zeroed stream_timestamps: %s', stream_timestamps.tolist())
-                    logger.debug('\tpost-zeroed stream_clock_times: %s', stream_clock_times.tolist())
-
-                    ## STREAM OUTPUTS: stream_timestamps, stream_clock_times, zeroed_stream_timestamps, zeroed_stream_clock_times, zeroed_stream_timestamps_dt, stream_datetimes
-                    # a_raw_df: pd.DataFrame = pd.DataFrame(dict(onset=zeroed_stream_timestamps, onset_dt=zeroed_stream_timestamps_dt, duration=([0.0] * len(zeroed_stream_timestamps_dt)), description=logger_strings))
-                    # all_annotations.append(a_raw_df)
-
-                    ## UPDATE: `streams_timestamp_dfs`
-                    streams_timestamp_dfs[name] = pd.DataFrame(dict(stream_timestamps=stream_timestamps,
-                        zeroed_stream_timestamps=zeroed_stream_timestamps, zeroed_stream_timestamps_dt=zeroed_stream_timestamps_dt,
-                        # stream_clock_times=stream_clock_times,  zeroed_stream_clock_times=zeroed_stream_clock_times,
-                        stream_datetimes = stream_datetimes,
-                    ))
-
-
-                    # ## In lightweight mode, only collect bare stream metadata and skip heavy data processing:
-                    # if not should_load_full_file_data:
-                    #     continue
+                    if build_timestamp_dfs or (fs == 0):
+                        assert stream_info_dict.get('stream_start_datetime', None) is not None
+                        zeroed_stream_timestamps_dt = pd.to_timedelta(zeroed_stream_timestamps, unit='s')
+                        start_ts = pd.Timestamp(stream_info_dict.get('stream_start_datetime', self.file_datetime))
+                        stream_datetimes = start_ts + zeroed_stream_timestamps_dt
+                        if build_timestamp_dfs:
+                            streams_timestamp_dfs[name] = pd.DataFrame(dict(
+                                stream_timestamps=stream_timestamps.copy(),
+                                zeroed_stream_timestamps=zeroed_stream_timestamps,
+                                zeroed_stream_timestamps_dt=zeroed_stream_timestamps_dt,
+                                stream_datetimes=stream_datetimes,
+                            ))
 
                     if (fs == 0):  
                         # irregular event streams
@@ -966,23 +939,16 @@ class LabRecorderXDF:
                         ## check
                         assert ((stream_info_dict['created_at_dt'] - self.file_datetime).total_seconds() < (90.0 * 60.0)) # should be less than 10 seconds between the file start and the logging stream (usually...)
 
-                        # a_raw_df: pd.DataFrame = pd.DataFrame(dict(onset=zeroed_stream_timestamps, onset_dt=zeroed_stream_timestamps_dt, converted_dt=converted_dt, duration=([0.0] * len(zeroed_stream_timestamps_dt)), description=logger_strings))
-                        a_raw_df: pd.DataFrame = pd.DataFrame(dict(onset=stream_datetimes, duration=([0.0] * len(zeroed_stream_timestamps_dt)), description=logger_strings))
+                        a_raw_df: pd.DataFrame = pd.DataFrame(dict(onset=stream_datetimes, duration=([0.0] * len(zeroed_stream_timestamps)), description=logger_strings))
                         all_annotations_dfs.append(a_raw_df)
 
-                        #TODO 2026-03-02 18:00: - [ ] See if the local import of MNE fixes this tz=UTC != tz=UTC issue:
                         from datetime import timezone
 
-                        # If it might be zoneinfo/pytz/other UTC:
                         orig_time = stream_info_dict['stream_start_datetime']
                         if orig_time is not None and orig_time.tzinfo is not None:
                             orig_time = orig_time.astimezone(timezone.utc)
-                        # raw = mne.Annotations(..., orig_time=orig_time)
 
-                        ## In lightweight mode, only collect bare stream metadata and skip heavy data processing:
-                        raw = mne.Annotations(onset=zeroed_stream_timestamps, duration=([0.0] * len(zeroed_stream_timestamps)), description=logger_strings, orig_time=orig_time) ## set orig_time=None # #TODO 2026-03-02 17:33: - [ ] this is raising and aborting the whole function (just one stream, the 'TextLogger_Markers' stream
-                        ## #TODO 2026-03-02 17:44: - [ ] stream_info_dict['stream_start_datetime']: `datetime.datetime(2026, 3, 1, 2, 9, 18, tzinfo=<UTC>)` is the problem, it's raising "ValueError: Date must be datetime object in UTC: datetime.datetime(2026, 3, 1, 2, 9, 18, tzinfo=<UTC>)"
-                        ## UPDATE `raws` and `raws_dict` with the new raw object:
+                        raw = mne.Annotations(onset=zeroed_stream_timestamps, duration=([0.0] * len(zeroed_stream_timestamps)), description=logger_strings, orig_time=orig_time)
                         self.datasets.append(raw)
                         all_annotations_objs.append(raw)
 
@@ -990,14 +956,13 @@ class LabRecorderXDF:
                             self.datasets_dict[a_modality].append(raw)
 
                     else:
+                        is_eeg_modality = (a_modality == DataModalityType.EEG.value) or (str(stream_info_dict.get('type', '')).upper() == 'EEG')
+                        if lazy_non_eeg_raws and (not is_eeg_modality):
+                            continue
                         ## fixed sampling rate streams:
                         _channels_dict = benedict(stream['info']['desc'][0]['channels'][0])
                         channels_df: pd.DataFrame = pd.DataFrame.from_records([{k:v[0] for k, v in ch_v.items()} for ch_v in _channels_dict.flatten()['channel']])
-                        data = np.array(stream['time_series']).T
-                        if (stream_info_dict['type'] == 'EEG'):
-                            pass
-                        # ch_names = [f"{name}_{i}" for i in range(data.shape[0])]
-                        # ch_types = ["eeg"] * data.shape[0]  # adjust depending on stream type
+                        data = np.asarray(stream['time_series'], dtype=np.float64).T.copy()
                         ch_names = channels_df['label'].to_list()
                         raw_types = channels_df['type'].to_list() if 'type' in channels_df.columns else ['RAW'] * len(ch_names)
                         ch_types = [self.lab_recorder_to_mne_to_type_dict.get(str(v).upper(), 'misc') for v in raw_types]
@@ -1005,16 +970,14 @@ class LabRecorderXDF:
                         info = mne.create_info(ch_names=ch_names, sfreq=fs, ch_types=ch_types)
                         info = info.set_meas_date(self.file_datetime)
                         info['description'] = self.xdf_file_path.as_posix()
-                        info['device_info'] = {'type':'USB', 'model':'EpocX', 'serial': '', 'site':'pho', 'stream_info': {}} # #TODO 2025-09-22 08:51: - [ ] Add Hostname<USB> or Hostname<BLE>
-                        # info['temp']
-                        ## add in the 'stream_info' properties:
+                        info['device_info'] = {'type':'USB', 'model':'EpocX', 'serial': '', 'site':'pho', 'stream_info': {}}
                         info['device_info']['stream_info'] = {}
                         for k, v in stream_info_dict.items():
                             info['device_info']['stream_info'][k] = deepcopy(v)
+                        ## END for k, v in stream_info_dict.items()...
 
-                        raw = mne.io.RawArray(data, info) ## also have , first_samp=0
+                        raw = mne.io.RawArray(data, info)
 
-                        ## UPDATE `raws` and `raws_dict` with the new raw object:
                         self.datasets.append(raw)
                         if a_modality is not None:
                             self.datasets_dict[a_modality].append(raw)
@@ -1066,7 +1029,7 @@ class LabRecorderXDF:
 
 
     @classmethod
-    def init_from_lab_recorder_xdf_file(cls, a_xdf_file: Path, should_load_full_file_data: bool=True, debug_print: bool=False, skipped_stream_names: Optional[List[str]]=None, preloaded_streams: Optional[List[Dict]] = None, preloaded_header: Optional[Dict] = None):
+    def init_from_lab_recorder_xdf_file(cls, a_xdf_file: Path, should_load_full_file_data: bool = True, debug_print: bool = False, skipped_stream_names: Optional[List[str]] = None, preloaded_streams: Optional[List[Dict]] = None, preloaded_header: Optional[Dict] = None, build_timestamp_dfs: bool = True, lazy_non_eeg_raws: bool = False):
         """
 
             Conclusions: `stream_clock_times` is not really needed if auto-sync is working.
@@ -1183,12 +1146,12 @@ class LabRecorderXDF:
             _obj = cls.init_basic_from_lab_recorder_xdf_file(a_xdf_file=a_xdf_file, skipped_stream_names=skipped_stream_names, debug_print=debug_print)
         file_datetime = _obj.file_datetime
         if not should_load_full_file_data:
-            stream_infos, streams_timestamp_dfs = _obj.perform_process_xdf_streams(debug_print=debug_print)
+            stream_infos, streams_timestamp_dfs = _obj.perform_process_xdf_streams(debug_print=debug_print, build_timestamp_dfs=build_timestamp_dfs)
             stream_infos = _obj.stream_infos
             raws = _obj.datasets
             raws_dict = _obj.datasets_dict
         else:
-            stream_infos, streams_timestamp_dfs, datasets, datasets_dict = _obj.perform_load_xdf_streams(debug_print=debug_print) # #TODO 2026-03-02 17:19: - [ ] ValueError: Date must be datetime object in UTC: datetime.datetime(2026, 3, 1, 2, 9, 18, tzinfo=<UTC>)
+            stream_infos, streams_timestamp_dfs, datasets, datasets_dict = _obj.perform_load_xdf_streams(debug_print=debug_print, build_timestamp_dfs=build_timestamp_dfs, lazy_non_eeg_raws=lazy_non_eeg_raws)
             raws = datasets
             raws_dict = datasets_dict
 

@@ -122,33 +122,53 @@ def apply_quality_and_session_gates(eeg_df: pd.DataFrame, quality_df: Optional[p
     keep_cols = ["t"] + usable
     gated = eeg_df[keep_cols].copy()
     if quality_df is not None and len(quality_df) > 0 and "t" in quality_df.columns:
-        from scipy.interpolate import interp1d
-
         q_cols = [c for c in usable if c in quality_df.columns]
         if q_cols:
-            q_sorted = quality_df[["t"] + q_cols].sort_values("t").drop_duplicates(subset=["t"], keep="last")
+            q_sub = quality_df[["t"] + q_cols]
+            if not q_sub["t"].is_monotonic_increasing:
+                q_sub = q_sub.sort_values("t", kind="mergesort")
+            q_sorted = q_sub.drop_duplicates(subset=["t"], keep="last")
             x_all = q_sorted["t"].to_numpy(dtype=float)
             target_t = gated["t"].to_numpy(dtype=float)
-            for ch in q_cols:
-                col_y = q_sorted[ch].to_numpy(dtype=float)
-                finite = np.isfinite(col_y)
-                if not np.any(finite):
-                    gated[ch] = np.nan
-                    continue
-                xf, yf = x_all[finite], col_y[finite]
-                if len(xf) == 1:
-                    q_interp = np.full(len(target_t), float(yf[0]), dtype=float)
-                    if cfg.mask_unknown_quality:
-                        q_interp[target_t < xf[0]] = np.nan
-                else:
-                    lead_fill = np.nan if cfg.mask_unknown_quality else float(yf[0])
-                    f_interp = interp1d(xf, yf, kind="previous", bounds_error=False, fill_value=(lead_fill, float(yf[-1])), assume_sorted=True)
-                    q_interp = np.asarray(f_interp(target_t), dtype=float)
-                is_valid = q_interp >= float(cfg.min_quality_to_keep)
+            min_q = float(cfg.min_quality_to_keep)
+            all_finite_q = bool(np.all(np.isfinite(q_sorted[q_cols].to_numpy(dtype=float))))
+            if all_finite_q and len(x_all) >= 1:
+                idx = np.searchsorted(x_all, target_t, side="right") - 1
+                idx_clamped = np.clip(idx, 0, len(x_all) - 1)
+                q_mat = q_sorted[q_cols].to_numpy(dtype=float)[idx_clamped]
                 if cfg.mask_unknown_quality:
-                    is_valid = is_valid & np.isfinite(q_interp)
-                gated.loc[~is_valid, ch] = np.nan
-            ## END for ch in q_cols...
+                    lead_mask = idx < 0
+                    if np.any(lead_mask):
+                        q_mat = q_mat.copy()
+                        q_mat[lead_mask, :] = np.nan
+                bad_mat = ~(q_mat >= min_q)
+                if cfg.mask_unknown_quality:
+                    bad_mat |= ~np.isfinite(q_mat)
+                for ci, ch in enumerate(q_cols):
+                    if np.any(bad_mat[:, ci]):
+                        col_vals = gated[ch].to_numpy(dtype=float, copy=True)
+                        col_vals[bad_mat[:, ci]] = np.nan
+                        gated[ch] = col_vals
+                ## END for ci, ch in enumerate(q_cols)...
+
+            else:
+                for ch in q_cols:
+                    col_y = q_sorted[ch].to_numpy(dtype=float)
+                    finite = np.isfinite(col_y)
+                    if not np.any(finite):
+                        gated[ch] = np.nan
+                        continue
+                    xf, yf = x_all[finite], col_y[finite]
+                    idx = np.searchsorted(xf, target_t, side="right") - 1
+                    q_interp = yf[np.clip(idx, 0, len(yf) - 1)].astype(float, copy=True)
+                    if cfg.mask_unknown_quality:
+                        q_interp[idx < 0] = np.nan
+                    is_valid = q_interp >= min_q
+                    if cfg.mask_unknown_quality:
+                        is_valid = is_valid & np.isfinite(q_interp)
+                    gated.loc[~is_valid, ch] = np.nan
+                ## END for ch in q_cols...
+
     return gated, usable
 
 
@@ -211,8 +231,40 @@ def _raw_stats_features_for_window(data_ch_x_t: np.ndarray, channel_ok: np.ndarr
     return feats
 
 
+def _filter_whole_trace_per_band(data: np.ndarray, t_vec: np.ndarray, sfreq: float, bands: Sequence[Tuple[str, float, float]], filter_order: int, filter_cache: Dict[Tuple[float, float, float], np.ndarray]) -> List[np.ndarray]:
+    """Band-pass filter continuous segments of ``data`` once per canonical band instead of per sliding window."""
+    n_ch, n_samples = data.shape
+    gap_thresh = max(1.0, 8.0 / max(float(sfreq), 1.0))
+    if n_samples > 1:
+        split_pts = np.flatnonzero(np.diff(t_vec) > gap_thresh) + 1
+    else:
+        split_pts = np.array([], dtype=np.int64)
+    seg_bounds: List[Tuple[int, int]] = []
+    prev_i = 0
+    for sp in split_pts:
+        seg_bounds.append((prev_i, int(sp)))
+        prev_i = int(sp)
+    ## END for sp in split_pts...
+
+    seg_bounds.append((prev_i, n_samples))
+
+    out_bands: List[np.ndarray] = []
+    for _name, fmin, fmax in bands:
+        filt_full = np.empty((n_ch, n_samples), dtype=np.float64)
+        for s0, s1 in seg_bounds:
+            if s1 <= s0:
+                continue
+            filt_full[:, s0:s1] = GFPBandPower.bandpass_filter_channels(data[:, s0:s1], float(fmin), float(fmax), float(sfreq), int(filter_order), filter_cache)
+        ## END for s0, s1 in seg_bounds...
+
+        out_bands.append(filt_full)
+    ## END for _name, fmin, fmax in bands...
+
+    return out_bands
+
+
 def build_feature_matrix(eeg_df: pd.DataFrame, channel_names: Sequence[str], sfreq: float, config: EEGManifoldConfig, *, viewport_t_min: Optional[float] = None, viewport_t_max: Optional[float] = None) -> Tuple[np.ndarray, np.ndarray, List[str]]:
-    """Build ``(n_windows, n_features)`` matrix and window-center times from gated EEG."""
+    """Build ``(n_windows, n_features)`` matrix and window-center times from gated EEG using whole-trace band filtering + O(1) prefix sums."""
     cfg = config.validated()
     empty = (np.zeros((0, 0), dtype=float), np.array([], dtype=float), list(channel_names))
     if eeg_df is None or len(eeg_df) == 0 or "t" not in eeg_df.columns:
@@ -220,35 +272,86 @@ def build_feature_matrix(eeg_df: pd.DataFrame, channel_names: Sequence[str], sfr
     cols = [c for c in channel_names if c in eeg_df.columns]
     if len(cols) < cfg.min_channels:
         return empty
-    df = eeg_df.sort_values("t").reset_index(drop=True)
+    df = eeg_df if eeg_df["t"].is_monotonic_increasing else eeg_df.sort_values("t", kind="mergesort").reset_index(drop=True)
     t_vec = df["t"].to_numpy(dtype=float)
     data = df[cols].to_numpy(dtype=float).T
     centers = _window_centers(t_vec, cfg.window_sec, cfg.hop_sec, t_min=viewport_t_min, t_max=viewport_t_max)
     if centers.size == 0:
         return empty
     half = 0.5 * cfg.window_sec
-    filter_cache: Dict[Tuple[float, float, float], np.ndarray] = {}
-    rows: List[np.ndarray] = []
-    kept_centers: List[float] = []
-    for center in centers:
-        lo, hi = float(center) - half, float(center) + half
-        mask = (t_vec >= lo) & (t_vec <= hi)
-        if not np.any(mask):
-            continue
-        win = data[:, mask]
-        channel_ok = np.array([_channel_window_ok(win[ci], cfg.max_nan_fraction) for ci in range(win.shape[0])], dtype=bool)
-        if int(np.sum(channel_ok)) < cfg.min_channels:
-            continue
-        if cfg.feature_mode == "raw_stats":
-            feat = _raw_stats_features_for_window(win, channel_ok)
-        else:
-            feat = _band_power_features_for_window(win, float(sfreq), cfg.bands, cfg.filter_order, filter_cache, channel_ok)
-        rows.append(feat)
-        kept_centers.append(float(center))
-    ## END for center in centers...
-    if not rows:
+    i0_all = np.searchsorted(t_vec, centers - half, side="left")
+    i1_all = np.searchsorted(t_vec, centers + half, side="right")
+    win_lens = i1_all - i0_all
+
+    n_ch, n_samples = data.shape
+    finite_mask = np.isfinite(data)
+    finite_csum = np.empty((n_ch, n_samples + 1), dtype=np.int64)
+    finite_csum[:, 0] = 0
+    np.cumsum(finite_mask, axis=1, dtype=np.int64, out=finite_csum[:, 1:])
+
+    non_empty_win = win_lens > 0
+    if not np.any(non_empty_win):
         return empty
-    return np.vstack(rows), np.asarray(kept_centers, dtype=float), cols
+
+    if cfg.feature_mode == "raw_stats":
+        rows: List[np.ndarray] = []
+        kept_centers: List[float] = []
+        for wi in np.flatnonzero(non_empty_win):
+            s0, s1 = int(i0_all[wi]), int(i1_all[wi])
+            wlen = float(s1 - s0)
+            n_fin = finite_csum[:, s1] - finite_csum[:, s0]
+            channel_ok = ((1.0 - (n_fin / wlen)) <= float(cfg.max_nan_fraction)) & (n_fin > 0)
+            if int(np.sum(channel_ok)) < cfg.min_channels:
+                continue
+            rows.append(_raw_stats_features_for_window(data[:, s0:s1], channel_ok))
+            kept_centers.append(float(centers[wi]))
+        ## END for wi in np.flatnonzero(non_empty_win)...
+
+        if not rows:
+            return empty
+        return np.vstack(rows), np.asarray(kept_centers, dtype=float), cols
+
+    # Band-power fast path: filter continuous trace once per band, then slice window mean-square via prefix sums
+    filter_cache: Dict[Tuple[float, float, float], np.ndarray] = {}
+    band_traces = _filter_whole_trace_per_band(data, t_vec, float(sfreq), cfg.bands, cfg.filter_order, filter_cache)
+    n_bands = len(cfg.bands)
+
+    band_sq_csums: List[np.ndarray] = []
+    for filt_b in band_traces:
+        valid_b = finite_mask & np.isfinite(filt_b)
+        sq_b = np.where(valid_b, filt_b * filt_b, 0.0)
+        csum_b = np.empty((n_ch, n_samples + 1), dtype=np.float64)
+        csum_b[:, 0] = 0.0
+        np.cumsum(sq_b, axis=1, dtype=np.float64, out=csum_b[:, 1:])
+        band_sq_csums.append(csum_b)
+    ## END for filt_b in band_traces...
+
+    cand_idx = np.flatnonzero(non_empty_win)
+    s0_v = i0_all[cand_idx]
+    s1_v = i1_all[cand_idx]
+    wlen_v = (s1_v - s0_v).astype(np.float64)
+    n_fin_mat = finite_csum[:, s1_v] - finite_csum[:, s0_v]  # (n_ch, n_cand)
+    ch_ok_mat = ((1.0 - (n_fin_mat / wlen_v[None, :])) <= float(cfg.max_nan_fraction)) & (n_fin_mat > 0)
+    win_keep = np.sum(ch_ok_mat, axis=0) >= int(cfg.min_channels)
+    if not np.any(win_keep):
+        return empty
+
+    s0_k = s0_v[win_keep]
+    s1_k = s1_v[win_keep]
+    n_fin_k = n_fin_mat[:, win_keep].astype(np.float64)
+    ch_ok_k = ch_ok_mat[:, win_keep]  # (n_ch, n_kept)
+    kept_c = centers[cand_idx[win_keep]].astype(np.float64)
+    n_kept = len(kept_c)
+
+    feat_3d = np.full((n_kept, n_ch, n_bands), np.nan, dtype=np.float64)
+    denom = np.where(ch_ok_k, np.maximum(n_fin_k, 1.0), 1.0)
+    for bi, csum_b in enumerate(band_sq_csums):
+        num = csum_b[:, s1_k] - csum_b[:, s0_k]
+        mean_sq = np.where(ch_ok_k, num / denom, np.nan)
+        feat_3d[:, :, bi] = mean_sq.T
+    ## END for bi, csum_b in enumerate(band_sq_csums)...
+
+    return feat_3d.reshape(n_kept, n_ch * n_bands), kept_c, cols
 
 
 def _standardize_features(X: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:

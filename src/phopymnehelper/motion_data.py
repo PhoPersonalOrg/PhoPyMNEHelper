@@ -82,24 +82,20 @@ class MotionData:
 
         if not isinstance(a_ds, pd.DataFrame):
             meas_date = deepcopy(a_ds.info['meas_date'])
-            # a_ds = motion_datasets[-1]
             a_motion_df: pd.DataFrame = a_ds.to_data_frame()
             time_col_names: str = 'time'
-
         else:
             assert (not should_set_bad_period_annotations), f"should_set_bad_period_annotations is True but a pd.DataFrame was passed instead of a mne.io.Raw object."
             meas_date = set_annotations_kwargs.pop('meas_date', None)
-
-            a_motion_df: pd.DataFrame = a_ds
             time_col_names: str = 't'
+            req_cols = [c for c in (time_col_names, 'AccX', 'AccY', 'AccZ') if c in a_ds.columns]
+            a_motion_df: pd.DataFrame = a_ds[req_cols].copy()
 
         assert time_col_names in a_motion_df.columns
 
         a_motion_df: pd.DataFrame = cls.compute_rolling_motion_change_detection(a_df=a_motion_df, total_change_threshold=total_accel_threshold, enable_global_normalization=True)
 
-        # annots: mne.Annotations = MNEHelpers.convert_df_with_boolean_col_to_epochs(deepcopy(a_motion_df), is_bad_col_name="is_moving", annotation_description_name="BAD_motion", time_col_names='time', meas_date=meas_date) # , **kwargs
-        
-        is_moving_annots_df: pd.DataFrame = MNEHelpers.convert_df_with_boolean_col_to_epochs(deepcopy(a_motion_df), is_bad_col_name="is_moving", annotation_description_name="BAD_motion", time_col_names=time_col_names)
+        is_moving_annots_df: pd.DataFrame = MNEHelpers.convert_df_with_boolean_col_to_epochs(a_motion_df, is_bad_col_name="is_moving", annotation_description_name="BAD_motion", time_col_names=time_col_names)
         if (minimum_bad_duration is not None) and (minimum_bad_duration > 0.0):
             _dur = is_moving_annots_df['duration']
             _dur_cmp = _dur.dt.total_seconds() if pd.api.types.is_timedelta64_dtype(_dur.dtype) else pd.to_numeric(_dur, errors='coerce')

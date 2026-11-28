@@ -261,34 +261,39 @@ def infer_epocx_counters_from_word7(word7: np.ndarray, *, eeg_rate: int = 128, c
 
 
 def demux_word7_series(word7: np.ndarray, counters: np.ndarray, *, eeg_rate: int = 128) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Demultiplex `(word7, counters)` into `(cq_scores, cq_norms, battery_percent)`."""
+    """Demultiplex `(word7, counters)` into `(cq_scores, cq_norms, battery_percent)` using vectorized sample-and-hold."""
     w = np.asarray(word7, dtype=np.int32) & 0xFFFF
     c = np.asarray(counters, dtype=np.int32)
     n = int(len(w))
+    if n == 0:
+        empty14 = np.zeros((0, 14), dtype=np.float64)
+        return empty14, empty14.copy(), np.full(0, np.nan, dtype=np.float64)
+
     period = 256 if int(eeg_rate) >= 256 else 128
     half_rate = period // 2
-
-    cq_norms = np.zeros((n, 14), dtype=np.float64)
-    battery = np.full(n, np.nan, dtype=np.float64)
-    state_norm = np.zeros(14, dtype=np.float64)
-    cur_batt = np.nan
-
-    slots = c % half_rate
+    slots = np.mod(c, half_rate)
     batt_slot = period - 1
     divisors = CQ_SLOT_SCALE_DIVISORS
     slot_to_1020 = CQ_SLOT_TO_1020_IDX
 
-    for k in range(n):
-        wk = int(w[k])
-        ck = int(c[k])
-        sk = int(slots[k])
-        if 0 <= sk < 14:
-            state_norm[slot_to_1020[sk]] = (float(wk) * 0.25) / divisors[sk]
-        elif ck == batt_slot and 1 <= wk <= 100:
-            cur_batt = float(wk)
-        cq_norms[k] = state_norm
-        battery[k] = cur_batt
-    ## END for k in range(n)...
+    row_indices = np.arange(n, dtype=np.int64)
+    w_f64 = w.astype(np.float64)
+    cq_norms = np.zeros((n, 14), dtype=np.float64)
+
+    for sk in range(14):
+        write_idx = np.where(slots == sk, row_indices, -1)
+        last_idx = np.maximum.accumulate(write_idx)
+        valid = last_idx >= 0
+        if np.any(valid):
+            safe_idx = np.maximum(last_idx, 0)
+            cq_norms[:, slot_to_1020[sk]] = np.where(valid, (w_f64[safe_idx] * 0.25) / divisors[sk], 0.0)
+    ## END for sk in range(14)...
+
+    batt_mask = (c == batt_slot) & (w >= 1) & (w <= 100)
+    b_write = np.where(batt_mask, row_indices, -1)
+    b_last = np.maximum.accumulate(b_write)
+    b_valid = b_last >= 0
+    battery = np.where(b_valid, w_f64[np.maximum(b_last, 0)], np.nan)
 
     cq_scores = cq_norms_to_scores_vec(cq_norms)
     return cq_scores, cq_norms, battery
